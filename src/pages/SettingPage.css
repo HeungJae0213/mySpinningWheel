@@ -1,0 +1,203 @@
+.setting-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  padding-bottom: 100px;
+}
+
+.setting-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  background: white;
+  border-bottom: 1px solid #f5f5f5;
+}
+
+.header-icons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.setting-page .asset-image {
+  width: 100%;
+  max-width: 200px;
+  margin: 0 auto;
+  border-radius: 16px;
+}
+
+.numeric-spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  margin: 0 auto;
+}
+
+.numeric-spinner button {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 2px solid #E5E8EB;
+  background: white;
+  font-size: 1.5rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.numeric-spinner button:hover:not(:disabled) {
+  border-color: #3182F6;
+  background: #F0F4FF;
+}
+
+.numeric-spinner button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.numeric-spinner span {
+  font-size: 2rem;
+  font-weight: 600;
+  min-width: 60px;
+  text-align: center;
+}
+
+.list-wrapper {
+  max-height: 500px;
+  overflow-y: auto;
+  width: 100%;
+}
+
+.list-container {
+  width: 100%;
+}
+
+.list-row {
+  border-bottom: 1px solid #F2F4F6;
+}
+
+.list-row.xlarge {
+  padding: 1.5rem 0;
+}
+
+.list-row-content {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+}
+
+.color-circle {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.list-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 1rem;
+  padding: 0.5rem 0;
+}
+
+.list-input::placeholder {
+  color: #ADAEB4;
+}
+
+/* 스크롤바 스타일링 */
+.list-wrapper::-webkit-scrollbar {
+  width: 8px;
+}
+
+.list-wrapper::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+.list-wrapper::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.list-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+.app-button {
+  width: 100%;
+  padding: 1rem 2rem;
+  background: #3182F6;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.app-button:hover {
+  background: #1C73E5;
+}
+
+.app-button:active {
+  transform: scale(0.98);
+}
+
+.cta-button {
+  flex: 1;
+  padding: 1rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cta-button.dark.weak {
+  background: #E5E8EB;
+  color: #191F28;
+}
+
+.cta-button.dark.weak:hover {
+  background: #D1D6DB;
+}
+
+.cta-button:not(.dark) {
+  background: #3182F6;
+  color: white;
+}
+
+.cta-button:not(.dark):hover {
+  background: #1C73E5;
+}
+
+.cta-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fixed-bottom-cta-double {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: white;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+}
+
+.list-row-texts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+

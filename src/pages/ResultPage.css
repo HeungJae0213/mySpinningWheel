@@ -1,0 +1,186 @@
+.result-page {
+  min-height: 100vh;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  padding-bottom: 100px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 100vw;
+  box-sizing: border-box;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+}
+
+.header-icons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.result-page .asset-image {
+  width: 100%;
+  max-width: 200px;
+  margin: 0 auto;
+  border-radius: 16px;
+}
+
+.wheel-wrapper {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+  min-height: 400px;
+}
+
+.wheel-container-result {
+  transition: opacity 0.3s ease;
+}
+
+.wheel {
+  position: relative;
+  background: white;
+}
+
+.wheel-section {
+  position: absolute;
+  overflow: hidden;
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+.section-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 결과 팝업 애니메이션 */
+@keyframes resultPopIn {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* 폭죽 떨어지는 애니메이션 */
+@keyframes confettiFall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100vh) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+.wheel-center-button {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 70px;
+  height: 70px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: bold;
+  transition: all 0.2s;
+}
+
+.wheel-center-button:hover {
+  transform: translate(-50%, -50%) scale(1.05);
+  box-shadow: 0 6px 15px rgba(0, 0, 0, 0.3);
+}
+
+.result-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.9);
+  z-index: 20;
+}
+
+.result-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2rem;
+}
+
+.result-text {
+  font-size: 2rem;
+  font-weight: bold;
+  color: #000;
+  text-shadow: 2px 2px 4px rgba(255, 255, 255, 1);
+  z-index: 30;
+}
+
+.confetti {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.confetti-piece {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  animation: fall linear infinite;
+}
+
+.confetti-piece.c0 { background: #ff6b6b; left: 10%; animation-duration: 2s; }
+.confetti-piece.c1 { background: #4ecdc4; left: 30%; animation-duration: 2.5s; }
+.confetti-piece.c2 { background: #ffe66d; left: 50%; animation-duration: 2.2s; }
+.confetti-piece.c3 { background: #95e1d3; left: 70%; animation-duration: 2.8s; }
+.confetti-piece.c4 { background: #f38181; left: 90%; animation-duration: 2.3s; }
+
+@keyframes fall {
+  0% {
+    top: -10%;
+    transform: translateX(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    top: 110%;
+    transform: translateX(50px) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}

@@ -5,12 +5,17 @@
 export const AD_CONFIG = {
   // 테스트용 광고 ID (환경 변수에서 가져오거나 기본값 사용)
   TEST_REWARDED_AD_ID: import.meta.env.VITE_REWARDED_AD_ID || 'ait-ad-test-rewarded-id', // 리워드 광고
+  TEST_INTERSTITIAL_AD_ID: import.meta.env.VITE_INTERSTITIAL_AD_ID || 'ait-ad-test-interstitial-id', // 전면형 광고
   
   // 광고 설정
   AD_DURATION: 3000, // 3초 광고 시뮬레이션
   MAX_LOAD_ATTEMPTS: 3, // 최대 로드 재시도 횟수
   LOAD_RETRY_DELAY: 1000, // 재시도 대기 시간 (1초)
   REWARD_SPINS: 5, // 광고 시청 시 부여할 스핀 횟수
+  
+  // 재시도 설정 (ProfilePage.tsx 스타일)
+  RETRY_DELAYS_MS: [1000, 3000, 5000], // 각 재시도 간 대기 시간 (ms)
+  WAIT_TIMEOUT_MS: 10000, // 광고 로드 최대 대기 시간 (10초)
 };
 
 // 환경별 광고 사용 여부

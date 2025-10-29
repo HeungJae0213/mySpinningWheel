@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import html2canvas from 'html2canvas';
 import './ResultPage.css';
 import { AD_CONFIG } from '../config/adConfig';
@@ -17,9 +17,20 @@ export default function ResultPage({ items, onBack }) {
   const [showAdModal, setShowAdModal] = useState(false);
   const [adWatching, setAdWatching] = useState(false);
   const [adProgress, setAdProgress] = useState(0);
-  const [adLoadAttempts, setAdLoadAttempts] = useState(0);
-  const [adLoadFailed, setAdLoadFailed] = useState(false);
+  
+  // 광고 상태 (ProfilePage.tsx 스타일)
+  const [adLoaded, setAdLoaded] = useState(false);
+  const [adShowing, setAdShowing] = useState(false);
+  const [adType, setAdType] = useState('rewarded'); // 'rewarded' | 'interstitial'
   const [isAdLoading, setIsAdLoading] = useState(false);
+  
+  // Refs (ProfilePage.tsx 스타일)
+  const cleanupRef = useRef(undefined);
+  const rewardEarnedRef = useRef(false);
+  const retryCountRef = useRef(0);
+  const retryTimeoutRef = useRef(undefined);
+  const adWaitTimeoutRef = useRef(undefined); // 광고 로드 대기 타임아웃
+  const adSkippedRef = useRef(false); // 광고 건너뛰기 여부
 
   // count를 반영하여 섹션 생성
   const wheelSections = useMemo(() => {
@@ -39,176 +50,434 @@ export default function ResultPage({ items, onBack }) {
   
   const totalSections = wheelSections.length;
 
-  // 실제 광고 로드 (Apps in Toss 공식 API 사용)
-  const loadAd = useCallback((attemptCount = 0) => {
-    if (attemptCount >= AD_CONFIG.MAX_LOAD_ATTEMPTS) {
-      setAdLoadFailed(true);
-      setIsAdLoading(false);
-      setSaveToast({ show: true, message: '광고를 불러올 수 없습니다. 잠시 후 다시 시도해주세요.' });
-      setTimeout(() => {
-        setSaveToast({ show: false, message: '' });
-        setShowAdModal(false);
-      }, 2500);
-      return;
+  /**
+   * 타임아웃 및 cleanup 정리 유틸리티
+   */
+  const clearAllTimers = () => {
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = undefined;
     }
-
-    // 광고 지원 여부 확인 (with-rewarded-ad 예제 방식)
-    const isAdUnsupported = GoogleAdMob?.loadAppsInTossAdMob?.isSupported?.() === false;
-    
-    if (isAdUnsupported) {
-      console.warn('광고가 준비되지 않았거나, 지원되지 않아요.');
-      setIsAdLoading(false);
-      setAdLoadFailed(true);
-      return;
+    if (adWaitTimeoutRef.current) {
+      clearTimeout(adWaitTimeoutRef.current);
+      adWaitTimeoutRef.current = undefined;
     }
+  };
 
-    setIsAdLoading(true);
-    setAdLoadAttempts(attemptCount + 1);
-    
-    console.log(`광고 로드 시작 - ID: ${AD_CONFIG.TEST_REWARDED_AD_ID}`);
-    
-    // 실제 광고 로드 (공식 문서 기반)
-    // https://developers-apps-in-toss.toss.im/bedrock/reference/framework/%EA%B4%91%EA%B3%A0/loadAppsInTossAdMob.html
-    const cleanup = GoogleAdMob.loadAppsInTossAdMob({
-      options: {
-        adGroupId: AD_CONFIG.TEST_REWARDED_AD_ID,
-      },
-      onEvent: (event) => {
-        console.log('광고 로드 이벤트:', event.type);
-        if (event.type === 'loaded') {
-          console.log('✅ 광고 로드 성공', event.data);
-          setIsAdLoading(false);
-          setAdLoadFailed(false);
-          setAdLoadAttempts(0);
-        }
-      },
-      onError: (error) => {
-        console.error(`❌ 광고 로드 실패 (시도 ${attemptCount + 1}/${AD_CONFIG.MAX_LOAD_ATTEMPTS})`, error);
+  /**
+   * 광고를 로드합니다. (ProfilePage.tsx 스타일)
+   * @param type 로드할 광고 타입 ('rewarded' 또는 'interstitial')
+   * 
+   * 동작 방식:
+   * 1. 광고 지원 여부 확인
+   * 2. 광고 로드 시도
+   * 3. 실패 시 재시도 (최대 3회)
+   * 4. 보상형 실패 시 전면형으로 전환
+   */
+  const loadAd = useCallback((type) => {
+    try {
+      const currentRetry = retryCountRef.current;
+      const adGroupId = type === 'rewarded' ? AD_CONFIG.TEST_REWARDED_AD_ID : AD_CONFIG.TEST_INTERSTITIAL_AD_ID;
+      const adTypeName = type === 'rewarded' ? '보상형' : '전면형';
+
+      console.log(`\n📥 [${adTypeName}] 광고 로드 시도 ${currentRetry + 1}회`);
+      console.log(`🔑 사용할 광고 ID: ${adGroupId}`);
+      console.log(`📦 AD_CONFIG.TEST_REWARDED_AD_ID: ${AD_CONFIG.TEST_REWARDED_AD_ID}`);
+      console.log(`📦 AD_CONFIG.TEST_INTERSTITIAL_AD_ID: ${AD_CONFIG.TEST_INTERSTITIAL_AD_ID}`);
+
+      // 광고 기능 지원 여부 확인
+      const isSupported = GoogleAdMob.loadAppsInTossAdMob.isSupported?.();
+      console.log('🔍 loadAppsInTossAdMob.isSupported():', isSupported);
+      console.log('🔍 GoogleAdMob:', GoogleAdMob);
+      console.log('🔍 GoogleAdMob.loadAppsInTossAdMob:', GoogleAdMob.loadAppsInTossAdMob);
+
+      if (isSupported !== true) {
+        console.warn(`❌ ${adTypeName} 광고 기능 미지원. isSupported:`, isSupported);
         setIsAdLoading(false);
-        
-        // 재시도
-        if (attemptCount + 1 < AD_CONFIG.MAX_LOAD_ATTEMPTS) {
-          console.log(`${AD_CONFIG.LOAD_RETRY_DELAY}ms 후 재시도...`);
-          setTimeout(() => {
-            loadAd(attemptCount + 1);
-          }, AD_CONFIG.LOAD_RETRY_DELAY);
+
+        // 보상형이 미지원이면 전면형으로 전환
+        if (type === 'rewarded') {
+          console.log('🔄 전면형 광고로 전환');
+          setAdType('interstitial');
+          retryCountRef.current = 0;
+          loadAd('interstitial');
         } else {
-          setAdLoadFailed(true);
+          console.warn('   광고 없이 진행');
+          // 전면형도 미지원이면 모달이 열려있으면 닫기
+          if (showAdModal) {
+            console.warn('⚠️ 광고 미지원 - 모달 닫기');
+            setShowAdModal(false);
+            setSaveToast({ show: true, message: '광고 기능이 지원되지 않습니다.' });
+            setTimeout(() => {
+              setSaveToast({ show: false, message: '' });
+            }, 2500);
+          }
+        }
+        return;
+      }
+
+      // 기존 cleanup 함수 실행
+      cleanupRef.current?.();
+      cleanupRef.current = undefined;
+
+      setAdLoaded(false);
+      setIsAdLoading(true);
+      console.log(`🔄 ${adTypeName} 광고 로드 시작...`);
+
+      // 광고 로드
+      const cleanup = GoogleAdMob.loadAppsInTossAdMob({
+        options: { adGroupId: adGroupId },
+        onEvent: (event) => {
+          if (event.type === 'loaded') {
+            console.log(`✅ ${adTypeName} 광고 로드 완료:`, event.data);
+            console.log(`📌 load 완료 - 이제 show를 호출해야 함 (토스 가이드 준수)`);
+            setAdLoaded(true);
+            setAdType(type);
+            setIsAdLoading(false);
+            retryCountRef.current = 0;
+            // 광고 로드 완료 시 타임아웃 정리
+            if (adWaitTimeoutRef.current) {
+              clearTimeout(adWaitTimeoutRef.current);
+              adWaitTimeoutRef.current = undefined;
+            }
+            // 모달이 이미 열려있으면 자동으로 광고 표시
+            // (load 완료 후 show 호출 - 토스 가이드 준수)
+            if (showAdModal && !adShowing) {
+              console.log('📌 모달이 열려있음 - load 완료 후 자동으로 show 호출');
+              // 상태 업데이트 후 showAd가 호출되도록 useEffect에 의존
+            }
+          }
+        },
+        onError: (loadError) => {
+          console.error(`❌ ${adTypeName} 광고 로드 실패:`, loadError);
+          console.error(`❌ 에러 타입:`, typeof loadError);
+          console.error(`❌ 에러 메시지:`, loadError?.message);
+          console.error(`❌ 에러 전체:`, JSON.stringify(loadError, null, 2));
+          setAdLoaded(false);
+          setIsAdLoading(false);
+
+          const errorMessage = loadError?.message || (typeof loadError === 'string' ? loadError : JSON.stringify(loadError)) || '';
+          console.error(`❌ 파싱된 에러 메시지: "${errorMessage}"`);
+
+          // "No ad to show" 에러인 경우 재시도
+          if (errorMessage.includes('No ad to show') || errorMessage.includes('No ad')) {
+            if (retryCountRef.current < AD_CONFIG.MAX_LOAD_ATTEMPTS) {
+              const delay = AD_CONFIG.RETRY_DELAYS_MS[retryCountRef.current] || 5000;
+              console.log(`⏱️ ${delay / 1000}초 후 ${adTypeName} 광고 재시도 (${retryCountRef.current + 1}/${AD_CONFIG.MAX_LOAD_ATTEMPTS})`);
+
+              retryTimeoutRef.current = setTimeout(() => {
+                retryCountRef.current += 1;
+                loadAd(type);
+              }, delay);
+            } else {
+              console.warn(`⚠️ ${adTypeName} 광고 ${AD_CONFIG.MAX_LOAD_ATTEMPTS}회 실패`);
+
+              // 보상형 실패 시 전면형으로 전환
+              if (type === 'rewarded') {
+                console.log('🔄 전면형 광고로 전환');
+                setAdType('interstitial');
+                retryCountRef.current = 0;
+                loadAd('interstitial');
+            } else {
+              console.warn('   광고 없이 진행');
+              retryCountRef.current = 0;
+              // 모달이 열려있으면 닫기
+              if (showAdModal) {
+                setShowAdModal(false);
+                setSaveToast({ show: true, message: '광고를 불러올 수 없습니다.' });
+                setTimeout(() => {
+                  setSaveToast({ show: false, message: '' });
+                }, 2500);
+              }
+            }
+          }
+        } else {
+          // 기타 에러 발생 시
+          console.error(`광고 로드 실패: ${errorMessage}`);
+
+          if (type === 'rewarded') {
+            console.warn('⚠️ 전면형 광고로 전환');
+            setAdType('interstitial');
+            retryCountRef.current = 0;
+            loadAd('interstitial');
+          } else {
+            console.warn('⚠️ 광고 없이 진행');
+            // 모달이 열려있으면 닫기
+            if (showAdModal) {
+              setShowAdModal(false);
+              setSaveToast({ show: true, message: '광고를 불러올 수 없습니다.' });
+              setTimeout(() => {
+                setSaveToast({ show: false, message: '' });
+              }, 2500);
+            }
+          }
+        }
+        },
+      });
+
+      cleanupRef.current = cleanup;
+    } catch (loadError) {
+      console.error(`⚠️ ${type === 'rewarded' ? '보상형' : '전면형'} 광고 로드 예외:`, loadError);
+      setAdLoaded(false);
+      setIsAdLoading(false);
+
+      // 보상형 실패 시 전면형으로 전환
+      if (type === 'rewarded') {
+        console.warn('⚠️ 전면형 광고로 전환');
+        setAdType('interstitial');
+        retryCountRef.current = 0;
+        loadAd('interstitial');
+      } else {
+        console.warn('⚠️ 광고 없이 진행');
+        // 모달이 열려있으면 닫기
+        if (showAdModal) {
+          setShowAdModal(false);
           setSaveToast({ show: true, message: '광고를 불러올 수 없습니다.' });
           setTimeout(() => {
             setSaveToast({ show: false, message: '' });
-            setShowAdModal(false);
           }, 2500);
         }
-      },
-    });
-
-    // cleanup 함수 반환
-    return cleanup;
+      }
+    }
   }, []);
 
-  // 실제 광고 표시 (Apps in Toss 공식 API 사용) - with-rewarded-ad 예제 방식
-  const handleWatchAd = useCallback(() => {
-    console.log(`🎬 보상형 광고 시작 - ID: ${AD_CONFIG.TEST_REWARDED_AD_ID}`);
-    
-    // 광고 지원 여부 확인 (with-rewarded-ad 예제 방식)
-    const isAdUnsupported = GoogleAdMob?.showAppsInTossAdMob?.isSupported?.() === false;
-    
-    if (isAdLoading || isAdUnsupported) {
-      console.warn('광고가 준비되지 않았거나, 지원되지 않아요.');
-      setSaveToast({ show: true, message: '광고가 준비되지 않았습니다.' });
-      setTimeout(() => {
-        setSaveToast({ show: false, message: '' });
-        setShowAdModal(false);
-      }, 2500);
-      return;
-    }
+  /**
+   * 광고를 표시합니다. (ProfilePage.tsx 스타일)
+   * - 보상형: 보상 획득 여부에 따라 스핀 횟수 지급
+   * - 전면형: dismissed 시 스핀 횟수 지급 (단, 중간에 건너뛰면 지급 안 함)
+   */
+  const showAd = useCallback(() => {
+    try {
+      // 광고 타입에 따라 다른 ID 사용
+      const adGroupId = adType === 'rewarded' ? AD_CONFIG.TEST_REWARDED_AD_ID : AD_CONFIG.TEST_INTERSTITIAL_AD_ID;
+      const adTypeName = adType === 'rewarded' ? '보상형' : '전면형';
 
-    setAdWatching(true);
-    setAdProgress(0);
-    setAdLoadFailed(false);
-    
-    // 실제 광고 표시 (공식 문서 기반)
-    // https://developers-apps-in-toss.toss.im/bedrock/reference/framework/%EA%B4%91%EA%B3%A0/showAppsInTossAdMob.html
-    GoogleAdMob.showAppsInTossAdMob({
-      options: {
-        adGroupId: AD_CONFIG.TEST_REWARDED_AD_ID,
-      },
-      onEvent: (event) => {
-        console.log('📺 광고 이벤트:', event.type);
-        switch (event.type) {
-          case 'requested':
-            console.log('광고 요청됨');
-            break;
-          
-          case 'impression':
-            console.log('광고가 화면에 노출됨');
-            break;
-          
-          case 'show':
-            console.log('✅ 광고 컨텐츠 보여짐');
-            setAdWatching(true);
-            break;
-          
-          case 'userEarnedReward':
-            console.log(`🎁 광고 시청 보상 획득 - ${AD_CONFIG.REWARD_SPINS}번의 기회`);
-            // 보상 지급
-            setRemainingSpins(AD_CONFIG.REWARD_SPINS);
-            setSaveToast({ show: true, message: `🎁 ${AD_CONFIG.REWARD_SPINS}번의 기회를 획득했습니다!` });
-            setTimeout(() => {
-              setSaveToast({ show: false, message: '' });
-            }, 2500);
-            break;
-          
-          case 'dismissed':
-            console.log('광고 닫힘');
-            setAdWatching(false);
-            setShowAdModal(false);
-            setAdProgress(0);
-            // 광고 다시 로드
-            loadAd(0);
-            break;
-          
-          case 'failedToShow':
-            console.error('❌ 광고 표시 실패');
-            setAdWatching(false);
-            setSaveToast({ show: true, message: '광고를 표시할 수 없습니다.' });
-            setTimeout(() => {
-              setSaveToast({ show: false, message: '' });
+      console.log(`✅ [${adTypeName}] 광고 표시 시작`);
+      setAdShowing(true);
+      setAdWatching(true);
+      rewardEarnedRef.current = false;
+      adSkippedRef.current = false; // 건너뛰기 플래그 초기화
+
+      GoogleAdMob.showAppsInTossAdMob({
+        options: { adGroupId: adGroupId },
+        onEvent: (event) => {
+          switch (event.type) {
+            case 'requested':
+              console.log(`✅ [${adTypeName}] 광고 표시 요청 완료`);
+              break;
+
+            case 'show':
+              console.log(`✅ [${adTypeName}] 광고 컨텐츠 표시 시작`);
+              break;
+
+            case 'impression':
+              console.log(`✅ [${adTypeName}] 광고 노출 완료`);
+              break;
+
+            case 'clicked':
+              console.log(`✅ [${adTypeName}] 광고 클릭됨`);
+              break;
+
+            case 'userEarnedReward':
+              // 보상형 광고만 해당
+              console.log('🎁 보상 획득!', event.data);
+              rewardEarnedRef.current = true;
+              break;
+
+            case 'dismissed':
+              console.log(`[${adTypeName}] 광고 닫힘`);
+
+              if (adType === 'rewarded') {
+                // 보상형: 보상 획득 여부 확인
+                if (rewardEarnedRef.current) {
+                  console.log('✅ 보상형 광고 완료 - 스핀 횟수 지급');
+                  setRemainingSpins(prev => prev + AD_CONFIG.REWARD_SPINS);
+                  setSaveToast({ show: true, message: `🎁 ${AD_CONFIG.REWARD_SPINS}번의 기회를 획득했습니다!` });
+                  setTimeout(() => {
+                    setSaveToast({ show: false, message: '' });
+                  }, 2500);
+                } else {
+                  console.warn('⚠️ 보상형 광고 중도 종료 - 보상 지급하지 않음');
+                  setSaveToast({ show: true, message: '광고를 끝까지 시청해주세요' });
+                  setTimeout(() => {
+                    setSaveToast({ show: false, message: '' });
+                  }, 2500);
+                }
+              } else {
+                // 전면형: dismissed 시 보상 지급 (단, 중간에 건너뛰면 지급 안 함)
+                if (adSkippedRef.current) {
+                  console.warn('⚠️ 전면형 광고 건너뛰기 - 보상 지급하지 않음');
+                  // 보상 지급 안 함
+                } else {
+                  console.log('✅ 전면형 광고 닫힘 - 스핀 횟수 지급');
+                  setRemainingSpins(prev => prev + AD_CONFIG.REWARD_SPINS);
+                  setSaveToast({ show: true, message: `🎁 ${AD_CONFIG.REWARD_SPINS}번의 기회를 획득했습니다!` });
+                  setTimeout(() => {
+                    setSaveToast({ show: false, message: '' });
+                  }, 2500);
+                }
+              }
+
+              // 상태 정리 및 다음 광고 로드
+              setAdShowing(false);
+              setAdWatching(false);
               setShowAdModal(false);
-            }, 2500);
-            break;
+              setAdProgress(0);
+              loadAd('rewarded'); // 다음엔 보상형부터 다시 시도
+              break;
+
+            case 'failedToShow':
+              console.warn(`⚠️ [${adTypeName}] 광고 표시 실패 - 광고 없이 진행:`, event.data);
+              setAdShowing(false);
+              setAdWatching(false);
+              setShowAdModal(false);
+              loadAd('rewarded');
+              break;
+          }
+        },
+        onError: (showError) => {
+          console.error(`❌ [${adTypeName}] 광고 표시 에러:`, showError);
+          setAdShowing(false);
+          setAdWatching(false);
+          setShowAdModal(false);
+          console.warn('⚠️ 광고 표시 에러 발생 - 광고 없이 진행');
+          loadAd('rewarded');
         }
-      },
-      onError: (error) => {
-        console.error('❌ 광고 표시 에러:', error);
-        setAdWatching(false);
+      });
+    } catch (error) {
+      console.error('❌ 광고 표시 중 예외 발생:', error);
+      setAdShowing(false);
+      setAdWatching(false);
+      setShowAdModal(false);
+      loadAd('rewarded');
+    }
+  }, [adType, loadAd]);
+
+  /**
+   * 모달이 열려있을 때 광고 로드 완료 감지 - 자동으로 광고 표시
+   * (토스 개발자 커뮤니티 가이드: load가 완료된 후 show를 호출해야 함)
+   */
+  useEffect(() => {
+    if (showAdModal && adLoaded && !adShowing) {
+      console.log('✅ 모달 열림 + 광고 로드 완료 - 자동으로 광고 표시');
+      
+      // 타임아웃 정리
+      if (adWaitTimeoutRef.current) {
+        clearTimeout(adWaitTimeoutRef.current);
+        adWaitTimeoutRef.current = undefined;
+      }
+
+      // load가 완료된 후 show 호출 (중요!)
+      showAd();
+    }
+  }, [showAdModal, adLoaded, adShowing, showAd]);
+
+  /**
+   * 광고 미지원 환경 체크 - 모달이 열려있을 때 자동으로 닫기
+   */
+  useEffect(() => {
+    if (showAdModal) {
+      const checkSupported = () => {
+        const loadSupported = GoogleAdMob.loadAppsInTossAdMob.isSupported?.();
+        const showSupported = GoogleAdMob.showAppsInTossAdMob.isSupported?.();
+        
+        if (loadSupported === false || showSupported === false) {
+          console.warn('⚠️ 모달이 열려있지만 광고 미지원 - 모달 닫기');
+          setShowAdModal(false);
+          setSaveToast({ show: true, message: '광고 기능이 지원되지 않습니다.' });
+          setTimeout(() => {
+            setSaveToast({ show: false, message: '' });
+          }, 2500);
+        }
+      };
+      
+      // 약간의 지연 후 체크 (초기화 시간 고려)
+      const timeout = setTimeout(checkSupported, 500);
+      return () => clearTimeout(timeout);
+    }
+  }, [showAdModal]);
+
+  /**
+   * 광고 보기 버튼 클릭 핸들러
+   */
+  const handleWatchAd = useCallback(() => {
+    try {
+      const isSupported = GoogleAdMob.showAppsInTossAdMob.isSupported?.();
+      console.log('🔍 showAppsInTossAdMob.isSupported():', isSupported);
+      console.log('📊 adLoaded 상태:', adLoaded);
+      console.log('📊 광고 타입:', adType);
+
+      if (isSupported !== true) {
+        console.warn('광고 표시 기능 미지원. isSupported:', isSupported);
         setShowAdModal(false);
-        setSaveToast({ show: true, message: '광고 표시 중 오류가 발생했습니다.' });
+        setSaveToast({ show: true, message: '광고 기능이 지원되지 않습니다.' });
         setTimeout(() => {
           setSaveToast({ show: false, message: '' });
         }, 2500);
-      },
-    });
-  }, [isAdLoading, loadAd]);
+        return;
+      }
 
-  // 광고 건너뛰기
+      // 광고 로드 중이라면 대기 (타임아웃 설정)
+      if (adLoaded === false) {
+        console.log('⏳ 광고 로드 대기 중');
+        setSaveToast({ show: true, message: '광고를 불러오는 중입니다...' });
+        setTimeout(() => {
+          setSaveToast({ show: false, message: '' });
+        }, 2000);
+
+        // 타임아웃 설정: 일정 시간 후에도 로드되지 않으면 모달 닫기
+        if (adWaitTimeoutRef.current) {
+          clearTimeout(adWaitTimeoutRef.current);
+        }
+        adWaitTimeoutRef.current = setTimeout(() => {
+          console.warn(`⚠️ 광고 로드 타임아웃 (${AD_CONFIG.WAIT_TIMEOUT_MS / 1000}초) - 모달 닫기`);
+          setShowAdModal(false);
+          setSaveToast({ show: true, message: '광고를 불러올 수 없습니다. 다시 시도해주세요.' });
+          setTimeout(() => {
+            setSaveToast({ show: false, message: '' });
+          }, 2500);
+        }, AD_CONFIG.WAIT_TIMEOUT_MS);
+        return;
+      }
+
+      // 광고 로드 완료 시 타임아웃 정리
+      if (adWaitTimeoutRef.current) {
+        clearTimeout(adWaitTimeoutRef.current);
+        adWaitTimeoutRef.current = undefined;
+      }
+
+      // 광고가 이미 로드된 경우 바로 표시
+      showAd();
+    } catch (error) {
+      console.error('❌ 광고 표시 중 예외 발생:', error);
+      setShowAdModal(false);
+    }
+  }, [adLoaded, adType, showAd]);
+
+  // 광고 건너뛰기 (중간에 끊으면 보상 지급 안 함)
   const handleAdSkip = () => {
+    console.warn('⚠️ 광고 건너뛰기 - 보상 지급하지 않음');
+    adSkippedRef.current = true; // 건너뛰기 플래그 설정
+    setAdShowing(false);
     setAdWatching(false);
     setShowAdModal(false);
     setAdProgress(0);
+    rewardEarnedRef.current = false; // 보상 지급 안 함
   };
 
-  // 컴포넌트 마운트 시 광고 로드 (with-rewarded-ad 예제 방식)
+  /**
+   * 컴포넌트 마운트 시 광고 로드 및 언마운트 시 정리
+   */
   useEffect(() => {
-    console.log('🔄 컴포넌트 마운트 - 광고 로드 시작');
-    const cleanup = loadAd(0);
-    
+    loadAd('rewarded');
+
     return () => {
-      if (cleanup) {
-        console.log('🧹 컴포넌트 언마운트 - 광고 cleanup');
-        cleanup();
-      }
+      // cleanup 함수 호출
+      cleanupRef.current?.();
+      cleanupRef.current = undefined;
+
+      // 타이머 정리
+      clearAllTimers();
     };
   }, [loadAd]);
 
@@ -636,7 +905,7 @@ export default function ResultPage({ items, onBack }) {
                   fontSize: '14px',
                   color: '#666',
                   margin: 0
-                }}>시도 {adLoadAttempts}/3</p>
+                }}>잠시만 기다려주세요...</p>
               </>
             ) : adWatching ? (
               <>

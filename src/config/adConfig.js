@@ -15,7 +15,7 @@ export const AD_CONFIG = {
   
   // 재시도 설정 (ProfilePage.tsx 스타일)
   RETRY_DELAYS_MS: [1000, 3000, 5000], // 각 재시도 간 대기 시간 (ms)
-  WAIT_TIMEOUT_MS: 10000, // 광고 로드 최대 대기 시간 (10초)
+  WAIT_TIMEOUT_MS: 1000, // 광고 로드 최대 대기 시간 (1초)
 };
 
 // 환경별 광고 사용 여부

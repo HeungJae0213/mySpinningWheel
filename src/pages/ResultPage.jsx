@@ -18,11 +18,11 @@ export default function ResultPage({ items, onBack }) {
   const [adWatching, setAdWatching] = useState(false);
   const [adProgress, setAdProgress] = useState(0);
   
-  // 광고 상태 (ProfilePage.tsx 스타일)
+  // 광고 상태 (ProfilePage.tsx 스타일 - 단순화)
   const [adLoaded, setAdLoaded] = useState(false);
   const [adShowing, setAdShowing] = useState(false);
   const [adType, setAdType] = useState('rewarded'); // 'rewarded' | 'interstitial'
-  const [isAdLoading, setIsAdLoading] = useState(false);
+  const [adLoading, setAdLoading] = useState(true); // with-rewarded-ad 스타일
   
   // Refs (ProfilePage.tsx 스타일)
   const cleanupRef = useRef(undefined);
@@ -30,7 +30,128 @@ export default function ResultPage({ items, onBack }) {
   const retryCountRef = useRef(0);
   const retryTimeoutRef = useRef(undefined);
   const adWaitTimeoutRef = useRef(undefined); // 광고 로드 대기 타임아웃
+  // const spinAdTimeoutRef = useRef(undefined); // 스핀 시 광고 대기 타임아웃(3초) (원복: 사용 안 함)
   const adSkippedRef = useRef(false); // 광고 건너뛰기 여부
+  const loadAdRef = useRef(undefined); // loadAd 안전 호출용 ref
+
+  /**
+   * 광고 표시 함수 (위로 올려 훅들이 참조 전 초기화)
+   */
+  /* moved above */ const __unused_showAd = useCallback(() => {
+    try {
+      // 광고 타입에 따라 다른 ID 사용
+      const adGroupId = adType === 'rewarded' ? AD_CONFIG.TEST_REWARDED_AD_ID : AD_CONFIG.TEST_INTERSTITIAL_AD_ID;
+      const adTypeName = adType === 'rewarded' ? '보상형' : '전면형';
+
+      console.log(`✅ [${adTypeName}] 광고 표시 시작`);
+      console.log('📞 GoogleAdMob.showAppsInTossAdMob 호출:', {
+        adGroupId,
+        adType: adType,
+        adLoaded: adLoaded
+      });
+      
+      // 네이티브 광고 표시 준비 - 상태 먼저 업데이트
+      setAdShowing(true);
+      setAdWatching(true);
+      rewardEarnedRef.current = false;
+      adSkippedRef.current = false; // 건너뛰기 플래그 초기화
+      
+      // 모달을 숨기지 않고 유지 (네이티브 광고가 위에 오버레이됨)
+      // 단, adShowing이 true가 되면 모달은 조건부 렌더링으로 숨김
+      
+      GoogleAdMob.showAppsInTossAdMob({
+        options: { adGroupId }, // ES6 shorthand 사용
+        onEvent: (event) => {
+          switch (event.type) {
+            case 'requested':
+              console.log(`✅ [${adTypeName}] 광고 표시 요청 완료`);
+              break;
+
+            case 'show':
+              console.log(`✅ [${adTypeName}] 광고 컨텐츠 표시 시작 - 네이티브 레이어에 표시됨`);
+              break;
+
+            case 'impression':
+              console.log(`✅ [${adTypeName}] 광고 노출 완료`);
+              break;
+
+            case 'clicked':
+              console.log(`✅ [${adTypeName}] 광고 클릭됨`);
+              break;
+
+            case 'userEarnedReward':
+              // 보상형 광고만 해당
+              console.log('🎁 보상 획득!', event.data);
+              rewardEarnedRef.current = true;
+              break;
+
+            case 'dismissed':
+              console.log(`[${adTypeName}] 광고 닫힘`);
+
+              if (adType === 'rewarded') {
+                // 보상형: 보상 획득 여부 확인
+                if (rewardEarnedRef.current) {
+                  console.log('✅ 보상형 광고 완료 - 스핀 횟수 지급');
+                  setRemainingSpins(prev => prev + AD_CONFIG.REWARD_SPINS);
+                  setSaveToast({ show: true, message: `🎁 ${AD_CONFIG.REWARD_SPINS}번의 기회를 획득했습니다!` });
+                  setTimeout(() => {
+                    setSaveToast({ show: false, message: '' });
+                  }, 2500);
+                } else {
+                  console.warn('⚠️ 보상형 광고 중도 종료 - 보상 지급하지 않음');
+                  setSaveToast({ show: true, message: '광고를 끝까지 시청해주세요' });
+                  setTimeout(() => {
+                    setSaveToast({ show: false, message: '' });
+                  }, 2500);
+                }
+              } else {
+                // 전면형: dismissed 시 보상 지급 (단, 중간에 건너뛰면 지급 안 함)
+                if (adSkippedRef.current) {
+                  console.warn('⚠️ 전면형 광고 건너뛰기 - 보상 지급하지 않음');
+                } else {
+                  console.log('✅ 전면형 광고 닫힘 - 스핀 횟수 지급');
+                  setRemainingSpins(prev => prev + AD_CONFIG.REWARD_SPINS);
+                  setSaveToast({ show: true, message: `🎁 ${AD_CONFIG.REWARD_SPINS}번의 기회를 획득했습니다!` });
+                  setTimeout(() => {
+                    setSaveToast({ show: false, message: '' });
+                  }, 2500);
+                }
+              }
+
+              // 상태 정리 및 다음 광고 로드
+              setAdShowing(false);
+              setAdWatching(false);
+              setShowAdModal(false);
+              setAdProgress(0);
+              loadAdRef.current?.('rewarded'); // 다음엔 보상형부터 다시 시도
+              break;
+
+            case 'failedToShow':
+              console.warn(`⚠️ [${adTypeName}] 광고 표시 실패 - 광고 없이 진행:`, event.data);
+              setAdShowing(false);
+              setAdWatching(false);
+              setShowAdModal(false);
+              loadAdRef.current?.('rewarded');
+              break;
+          }
+        },
+        onError: (showError) => {
+          console.error(`❌ [${adTypeName}] 광고 표시 에러:`, showError);
+          setAdShowing(false);
+          setAdWatching(false);
+          setShowAdModal(false);
+          console.warn('⚠️ 광고 표시 에러 발생 - 광고 없이 진행');
+          loadAdRef.current?.('rewarded');
+        }
+      });
+    } catch (error) {
+      console.error('❌ 광고 표시 중 예외 발생:', error);
+      setAdShowing(false);
+      setAdWatching(false);
+      setShowAdModal(false);
+      loadAdRef.current?.('rewarded');
+    }
+  }, [adType, adLoaded]);
 
   // count를 반영하여 섹션 생성
   const wheelSections = useMemo(() => {
@@ -65,6 +186,21 @@ export default function ResultPage({ items, onBack }) {
   };
 
   /**
+   * 광고 실패 시 위로 1회 제공
+   */
+  const grantConsolationSpin = (message) => {
+    setRemainingSpins(prev => prev + 1);
+    if (message) {
+      setSaveToast({ show: true, message });
+      setTimeout(() => {
+        setSaveToast({ show: false, message: '' });
+      }, 2000);
+    }
+  };
+
+  // 원복: 스핀 시 광고 흐름을 자동 진행하지 않음
+
+  /**
    * 광고를 로드합니다. (ProfilePage.tsx 스타일)
    * @param type 로드할 광고 타입 ('rewarded' 또는 'interstitial')
    * 
@@ -93,25 +229,14 @@ export default function ResultPage({ items, onBack }) {
 
       if (isSupported !== true) {
         console.warn(`❌ ${adTypeName} 광고 기능 미지원. isSupported:`, isSupported);
-        setIsAdLoading(false);
-
-        // 보상형이 미지원이면 전면형으로 전환
+        setAdLoading(false);
         if (type === 'rewarded') {
-          console.log('🔄 전면형 광고로 전환');
+          console.log('🔄 전면형 광고로 전환 (미지원)');
           setAdType('interstitial');
-          retryCountRef.current = 0;
           loadAd('interstitial');
         } else {
-          console.warn('   광고 없이 진행');
-          // 전면형도 미지원이면 모달이 열려있으면 닫기
-          if (showAdModal) {
-            console.warn('⚠️ 광고 미지원 - 모달 닫기');
-            setShowAdModal(false);
-            setSaveToast({ show: true, message: '광고 기능이 지원되지 않습니다.' });
-            setTimeout(() => {
-              setSaveToast({ show: false, message: '' });
-            }, 2500);
-          }
+          if (showAdModal) setShowAdModal(false);
+          grantConsolationSpin();
         }
         return;
       }
@@ -121,19 +246,25 @@ export default function ResultPage({ items, onBack }) {
       cleanupRef.current = undefined;
 
       setAdLoaded(false);
-      setIsAdLoading(true);
-      console.log(`🔄 ${adTypeName} 광고 로드 시작...`);
+      setAdLoading(true); // with-rewarded-ad 스타일
+      console.log(`🔄 ${adTypeName} 광고 로드 시작... (adGroupId: ${adGroupId})`);
 
-      // 광고 로드
+      // 광고 로드 (with-rewarded-ad 스타일)
+      console.log('📞 GoogleAdMob.loadAppsInTossAdMob 호출:', {
+        adGroupId,
+        type,
+        retryCount: currentRetry
+      });
+      
       const cleanup = GoogleAdMob.loadAppsInTossAdMob({
-        options: { adGroupId: adGroupId },
+        options: { adGroupId }, // ES6 shorthand 사용
         onEvent: (event) => {
           if (event.type === 'loaded') {
             console.log(`✅ ${adTypeName} 광고 로드 완료:`, event.data);
             console.log(`📌 load 완료 - 이제 show를 호출해야 함 (토스 가이드 준수)`);
             setAdLoaded(true);
             setAdType(type);
-            setIsAdLoading(false);
+            setAdLoading(false); // with-rewarded-ad 스타일
             retryCountRef.current = 0;
             // 광고 로드 완료 시 타임아웃 정리
             if (adWaitTimeoutRef.current) {
@@ -149,69 +280,28 @@ export default function ResultPage({ items, onBack }) {
           }
         },
         onError: (loadError) => {
-          console.error(`❌ ${adTypeName} 광고 로드 실패:`, loadError);
+          console.error(`\n❌❌❌ [${adTypeName}] 광고 로드 실패 ❌❌❌`);
+          console.error(`❌ 에러 원본:`, loadError);
           console.error(`❌ 에러 타입:`, typeof loadError);
           console.error(`❌ 에러 메시지:`, loadError?.message);
-          console.error(`❌ 에러 전체:`, JSON.stringify(loadError, null, 2));
+          console.error(`❌ 에러 코드:`, loadError?.code);
+          console.error(`❌ 에러 전체 객체:`, JSON.stringify(loadError, null, 2));
+          console.error(`❌ 사용한 광고 ID: ${adGroupId}`);
+          console.error(`❌ 현재 재시도 횟수: ${retryCountRef.current}`);
+          
           setAdLoaded(false);
-          setIsAdLoading(false);
+          setAdLoading(false);
 
-          const errorMessage = loadError?.message || (typeof loadError === 'string' ? loadError : JSON.stringify(loadError)) || '';
-          console.error(`❌ 파싱된 에러 메시지: "${errorMessage}"`);
-
-          // "No ad to show" 에러인 경우 재시도
-          if (errorMessage.includes('No ad to show') || errorMessage.includes('No ad')) {
-            if (retryCountRef.current < AD_CONFIG.MAX_LOAD_ATTEMPTS) {
-              const delay = AD_CONFIG.RETRY_DELAYS_MS[retryCountRef.current] || 5000;
-              console.log(`⏱️ ${delay / 1000}초 후 ${adTypeName} 광고 재시도 (${retryCountRef.current + 1}/${AD_CONFIG.MAX_LOAD_ATTEMPTS})`);
-
-              retryTimeoutRef.current = setTimeout(() => {
-                retryCountRef.current += 1;
-                loadAd(type);
-              }, delay);
-            } else {
-              console.warn(`⚠️ ${adTypeName} 광고 ${AD_CONFIG.MAX_LOAD_ATTEMPTS}회 실패`);
-
-              // 보상형 실패 시 전면형으로 전환
-              if (type === 'rewarded') {
-                console.log('🔄 전면형 광고로 전환');
-                setAdType('interstitial');
-                retryCountRef.current = 0;
-                loadAd('interstitial');
-            } else {
-              console.warn('   광고 없이 진행');
-              retryCountRef.current = 0;
-              // 모달이 열려있으면 닫기
-              if (showAdModal) {
-                setShowAdModal(false);
-                setSaveToast({ show: true, message: '광고를 불러올 수 없습니다.' });
-                setTimeout(() => {
-                  setSaveToast({ show: false, message: '' });
-                }, 2500);
-              }
-            }
-          }
-        } else {
-          // 기타 에러 발생 시
-          console.error(`광고 로드 실패: ${errorMessage}`);
-
+          // 단순 정책: 보상형 실패 → 전면형 1회 시도, 전면형 실패 → 즉시 1회 지급
           if (type === 'rewarded') {
-            console.warn('⚠️ 전면형 광고로 전환');
+            console.warn('⚠️ 보상형 로드 실패 - 전면형으로 전환');
             setAdType('interstitial');
-            retryCountRef.current = 0;
             loadAd('interstitial');
           } else {
-            console.warn('⚠️ 광고 없이 진행');
-            // 모달이 열려있으면 닫기
-            if (showAdModal) {
-              setShowAdModal(false);
-              setSaveToast({ show: true, message: '광고를 불러올 수 없습니다.' });
-              setTimeout(() => {
-                setSaveToast({ show: false, message: '' });
-              }, 2500);
-            }
+            console.warn('⚠️ 전면형 로드 실패 - 1회 지급 후 종료');
+            if (showAdModal) setShowAdModal(false);
+            grantConsolationSpin();
           }
-        }
         },
       });
 
@@ -219,7 +309,7 @@ export default function ResultPage({ items, onBack }) {
     } catch (loadError) {
       console.error(`⚠️ ${type === 'rewarded' ? '보상형' : '전면형'} 광고 로드 예외:`, loadError);
       setAdLoaded(false);
-      setIsAdLoading(false);
+      setAdLoading(false);
 
       // 보상형 실패 시 전면형으로 전환
       if (type === 'rewarded') {
@@ -229,17 +319,22 @@ export default function ResultPage({ items, onBack }) {
         loadAd('interstitial');
       } else {
         console.warn('⚠️ 광고 없이 진행');
-        // 모달이 열려있으면 닫기
+        // 모달이 열려있으면 닫고 1회 제공
         if (showAdModal) {
           setShowAdModal(false);
-          setSaveToast({ show: true, message: '광고를 불러올 수 없습니다.' });
-          setTimeout(() => {
-            setSaveToast({ show: false, message: '' });
-          }, 2500);
+          grantConsolationSpin();
         }
       }
     }
-  }, []);
+  }, [showAdModal]);
+
+  // ref에 연결하여 상단에서 안전하게 호출 가능하도록 설정
+  useEffect(() => {
+    loadAdRef.current = loadAd;
+    return () => {
+      loadAdRef.current = undefined;
+    };
+  }, [loadAd]);
 
   /**
    * 광고를 표시합니다. (ProfilePage.tsx 스타일)
@@ -253,13 +348,23 @@ export default function ResultPage({ items, onBack }) {
       const adTypeName = adType === 'rewarded' ? '보상형' : '전면형';
 
       console.log(`✅ [${adTypeName}] 광고 표시 시작`);
+      console.log('📞 GoogleAdMob.showAppsInTossAdMob 호출:', {
+        adGroupId,
+        adType: adType,
+        adLoaded: adLoaded
+      });
+      
+      // 네이티브 광고 표시 준비 - 상태 먼저 업데이트
       setAdShowing(true);
       setAdWatching(true);
       rewardEarnedRef.current = false;
       adSkippedRef.current = false; // 건너뛰기 플래그 초기화
-
+      
+      // 모달을 숨기지 않고 유지 (네이티브 광고가 위에 오버레이됨)
+      // 단, adShowing이 true가 되면 모달은 조건부 렌더링으로 숨김
+      
       GoogleAdMob.showAppsInTossAdMob({
-        options: { adGroupId: adGroupId },
+        options: { adGroupId }, // ES6 shorthand 사용
         onEvent: (event) => {
           switch (event.type) {
             case 'requested':
@@ -267,7 +372,10 @@ export default function ResultPage({ items, onBack }) {
               break;
 
             case 'show':
-              console.log(`✅ [${adTypeName}] 광고 컨텐츠 표시 시작`);
+              console.log(`✅ [${adTypeName}] 광고 컨텐츠 표시 시작 - 네이티브 레이어에 표시됨`);
+              // 네이티브 광고가 표시되면 웹뷰 위에 오버레이되므로
+              // 모달은 자동으로 가려지지만, 명확성을 위해 유지
+              // (네이티브 광고가 z-index: 1000보다 훨씬 위에 표시됨)
               break;
 
             case 'impression':
@@ -327,11 +435,18 @@ export default function ResultPage({ items, onBack }) {
               break;
 
             case 'failedToShow':
-              console.warn(`⚠️ [${adTypeName}] 광고 표시 실패 - 광고 없이 진행:`, event.data);
+              console.warn(`⚠️ [${adTypeName}] 광고 표시 실패`, event.data);
               setAdShowing(false);
               setAdWatching(false);
               setShowAdModal(false);
-              loadAd('rewarded');
+              if (adType === 'rewarded') {
+                // 보상형 표시 실패 → 전면형 시도
+                setAdType('interstitial');
+                loadAd('interstitial');
+              } else {
+                // 전면형 표시 실패 → 1회 지급
+                grantConsolationSpin();
+              }
               break;
           }
         },
@@ -340,8 +455,12 @@ export default function ResultPage({ items, onBack }) {
           setAdShowing(false);
           setAdWatching(false);
           setShowAdModal(false);
-          console.warn('⚠️ 광고 표시 에러 발생 - 광고 없이 진행');
-          loadAd('rewarded');
+          if (adType === 'rewarded') {
+            setAdType('interstitial');
+            loadAd('interstitial');
+          } else {
+            grantConsolationSpin();
+          }
         }
       });
     } catch (error) {
@@ -349,7 +468,12 @@ export default function ResultPage({ items, onBack }) {
       setAdShowing(false);
       setAdWatching(false);
       setShowAdModal(false);
-      loadAd('rewarded');
+      if (adType === 'rewarded') {
+        setAdType('interstitial');
+        loadAd('interstitial');
+      } else {
+        grantConsolationSpin();
+      }
     }
   }, [adType, loadAd]);
 
@@ -366,6 +490,7 @@ export default function ResultPage({ items, onBack }) {
         clearTimeout(adWaitTimeoutRef.current);
         adWaitTimeoutRef.current = undefined;
       }
+      // 원복: 스핀 대기 타이머 사용 안 함
 
       // load가 완료된 후 show 호출 (중요!)
       showAd();
@@ -384,10 +509,7 @@ export default function ResultPage({ items, onBack }) {
         if (loadSupported === false || showSupported === false) {
           console.warn('⚠️ 모달이 열려있지만 광고 미지원 - 모달 닫기');
           setShowAdModal(false);
-          setSaveToast({ show: true, message: '광고 기능이 지원되지 않습니다.' });
-          setTimeout(() => {
-            setSaveToast({ show: false, message: '' });
-          }, 2500);
+          grantConsolationSpin('돌리기 기회를 얻었어요!');
         }
       };
       
@@ -398,61 +520,48 @@ export default function ResultPage({ items, onBack }) {
   }, [showAdModal]);
 
   /**
-   * 광고 보기 버튼 클릭 핸들러
+   * 광고 보기 버튼 클릭 핸들러 (with-rewarded-ad 스타일로 단순화)
    */
   const handleWatchAd = useCallback(() => {
     try {
       const isSupported = GoogleAdMob.showAppsInTossAdMob.isSupported?.();
-      console.log('🔍 showAppsInTossAdMob.isSupported():', isSupported);
-      console.log('📊 adLoaded 상태:', adLoaded);
-      console.log('📊 광고 타입:', adType);
+      console.log('🔍 [handleWatchAd] showAppsInTossAdMob.isSupported():', isSupported);
+      console.log('🔍 [handleWatchAd] adLoaded:', adLoaded);
+      console.log('🔍 [handleWatchAd] adLoading:', adLoading);
+      console.log('🔍 [handleWatchAd] adType:', adType);
 
-      if (isSupported !== true) {
-        console.warn('광고 표시 기능 미지원. isSupported:', isSupported);
-        setShowAdModal(false);
-        setSaveToast({ show: true, message: '광고 기능이 지원되지 않습니다.' });
-        setTimeout(() => {
-          setSaveToast({ show: false, message: '' });
-        }, 2500);
-        return;
-      }
-
-      // 광고 로드 중이라면 대기 (타임아웃 설정)
-      if (adLoaded === false) {
-        console.log('⏳ 광고 로드 대기 중');
-        setSaveToast({ show: true, message: '광고를 불러오는 중입니다...' });
-        setTimeout(() => {
-          setSaveToast({ show: false, message: '' });
-        }, 2000);
-
-        // 타임아웃 설정: 일정 시간 후에도 로드되지 않으면 모달 닫기
-        if (adWaitTimeoutRef.current) {
-          clearTimeout(adWaitTimeoutRef.current);
-        }
-        adWaitTimeoutRef.current = setTimeout(() => {
-          console.warn(`⚠️ 광고 로드 타임아웃 (${AD_CONFIG.WAIT_TIMEOUT_MS / 1000}초) - 모달 닫기`);
+      // with-rewarded-ad 스타일: loading이거나 미지원이면 리턴
+      if (adLoading || isSupported !== true) {
+        console.warn('⚠️ 광고 준비 안 됨 - loading:', adLoading, ', supported:', isSupported);
+        if (isSupported !== true) {
           setShowAdModal(false);
-          setSaveToast({ show: true, message: '광고를 불러올 수 없습니다. 다시 시도해주세요.' });
+          setSaveToast({ show: true, message: '광고 기능이 지원되지 않습니다.' });
           setTimeout(() => {
             setSaveToast({ show: false, message: '' });
           }, 2500);
-        }, AD_CONFIG.WAIT_TIMEOUT_MS);
+        } else if (adLoading) {
+          // 광고 로드 중이라면 로드 시작 요청
+          console.log('⏳ 광고 로드 중 - 모달 열려있으므로 자동으로 로드 진행');
+          // loadAd가 이미 실행 중이면 대기만 하면 됨
+        }
         return;
       }
 
-      // 광고 로드 완료 시 타임아웃 정리
-      if (adWaitTimeoutRef.current) {
-        clearTimeout(adWaitTimeoutRef.current);
-        adWaitTimeoutRef.current = undefined;
+      // 광고가 로드되어 있고 지원되면 바로 표시
+      if (adLoaded && !adLoading) {
+        console.log('✅ 광고 로드 완료 - show 호출');
+        showAd();
+      } else {
+        console.warn('⚠️ 광고 로드 안 됨 - 다시 로드 시도');
+        // 광고가 로드 안 되어 있으면 다시 로드
+        setAdLoading(true);
+        loadAd(adType);
       }
-
-      // 광고가 이미 로드된 경우 바로 표시
-      showAd();
     } catch (error) {
       console.error('❌ 광고 표시 중 예외 발생:', error);
       setShowAdModal(false);
     }
-  }, [adLoaded, adType, showAd]);
+  }, [adLoaded, adLoading, adType, showAd, loadAd]);
 
   // 광고 건너뛰기 (중간에 끊으면 보상 지급 안 함)
   const handleAdSkip = () => {
@@ -467,11 +576,14 @@ export default function ResultPage({ items, onBack }) {
 
   /**
    * 컴포넌트 마운트 시 광고 로드 및 언마운트 시 정리
+   * (with-rewarded-ad 스타일)
    */
   useEffect(() => {
+    console.log('🚀 ResultPage 마운트 - 광고 초기 로드 시작');
     loadAd('rewarded');
 
     return () => {
+      console.log('🧹 ResultPage 언마운트 - cleanup 실행');
       // cleanup 함수 호출
       cleanupRef.current?.();
       cleanupRef.current = undefined;
@@ -486,24 +598,32 @@ export default function ResultPage({ items, onBack }) {
     
     // 남은 스핀 횟수 확인
     if (remainingSpins <= 0) {
+      // 원복: 모달만 열고, 로드는 기존 로직에 맡김
       setShowAdModal(true);
       return;
     }
     
+    // 결정적 회전: 먼저 목표 섹션을 선택하고 그 섹션에 정확히 멈추도록 회전값 계산
+    const sectionAngle = 360 / totalSections;
+    const selectedIndex = Math.floor(Math.random() * totalSections);
+
+    // 최종 각도(finalAngle)를 선택 섹션의 중앙에 오도록 설정
+    const targetFinalAngle = 360 - (selectedIndex * sectionAngle + sectionAngle / 2);
+
+    // 현재 각도 대비 양의 방향으로 충분히 회전하여 targetFinalAngle에 도달
+    const currentAngle = ((rotation % 360) + 360) % 360;
+    const baseSpins = 5; // 최소 5바퀴
+    const targetTotalRotation = baseSpins * 360 + targetFinalAngle; // 기준 목표
+    // 현재 각도를 고려해 추가 회전량 산출
+    let additionalRotation = targetTotalRotation - currentAngle;
+    while (additionalRotation <= 0) additionalRotation += 360; // 양수 보정
+
+    const newRotation = rotation + additionalRotation;
     setIsSpinning(true);
     setRemainingSpins(prev => prev - 1);
-    
-    // 현재 rotation에서 시작하여 항상 오른쪽(양수)으로 5~10바퀴 추가 회전
-    const additionalRotation = 1800 + Math.random() * 1800; // 5~10바퀴
-    const newRotation = rotation + additionalRotation;
     setRotation(newRotation);
-    
+
     setTimeout(() => {
-      const finalAngle = newRotation % 360;
-      const sectionAngle = 360 / totalSections;
-      // 화살표가 위를 가리키므로, 위쪽 섹션을 선택
-      let selectedIndex = Math.floor((360 - finalAngle + sectionAngle / 2) / sectionAngle) % totalSections;
-      
       setResult(wheelSections[selectedIndex]);
       setShowResult(true);
       setIsSpinning(false);
@@ -523,21 +643,25 @@ export default function ResultPage({ items, onBack }) {
         return;
       }
       
-      // X 버튼과 하단 버튼만 숨김
+      // 저장 시에는 결과 카드만 캡처 (오버레이, 버튼 등은 제외)
       const closeButton = document.querySelector('.close-result-button');
       const bottomButtons = document.querySelector('.bottom-buttons');
       const headerElement = document.querySelector('.result-header');
+      const overlayElement = document.querySelector('.result-overlay');
+      const resultCard = document.querySelector('.result-card');
       
       if (closeButton) closeButton.style.visibility = 'hidden';
       if (bottomButtons) bottomButtons.style.visibility = 'hidden';
       if (headerElement) headerElement.style.visibility = 'hidden';
+      // 두번째 스샷처럼 배경 흐림 + 카드가 함께 보이도록 오버레이는 유지
       
       // DOM 업데이트 대기
       await new Promise(resolve => setTimeout(resolve, 50));
       
-      const element = document.querySelector('.result-page');
-      const canvas = await html2canvas(element, {
-        backgroundColor: '#1a1a1a',
+      // 결과 페이지 전체 캡처 (배경 흐림 + 카드 포함)
+      const target = document.querySelector('.result-page');
+      const canvas = await html2canvas(target, {
+        backgroundColor: null, // 원 배경 유지
         scale: 2,
         logging: false,
         useCORS: true,
@@ -548,41 +672,29 @@ export default function ResultPage({ items, onBack }) {
       if (closeButton) closeButton.style.visibility = 'visible';
       if (bottomButtons) bottomButtons.style.visibility = 'visible';
       if (headerElement) headerElement.style.visibility = 'visible';
+      // overlay는 변경하지 않음
       
       // Canvas를 Base64로 변환
       const base64Data = canvas.toDataURL('image/png').split(',')[1];
       const timestamp = new Date().getTime();
       const filename = `돌림판_결과_${timestamp}.png`;
       
-      // Apps in Toss saveBase64Data API 사용 (try-catch로 감싸기)
-      // https://developers-apps-in-toss.toss.im/bedrock/reference/framework/데이터/saveBase64Data.html
+      // Apps in Toss saveBase64Data API 사용 (Result.tsx 참고)
+      // API 형식: { data, fileName, mimeType }
       try {
-        if (saveBase64Data && saveBase64Data.isSupported?.() === true) {
-          console.log('Apps in Toss 갤러리 저장 사용');
-          saveBase64Data({
-            base64Data: base64Data,
-            filename: filename,
-            onSuccess: () => {
-              console.log('갤러리 저장 성공');
-              setSaveToast({ show: true, message: '📷 갤러리에 저장했습니다!' });
-              setTimeout(() => {
-                setSaveToast({ show: false, message: '' });
-              }, 2500);
-            },
-            onError: (error) => {
-              console.error('갤러리 저장 실패:', error);
-              // 실패 시 브라우저 다운로드로 대체
-              fallbackDownload(canvas, filename);
-            },
-          });
-        } else {
-          console.warn('갤러리 저장이 지원되지 않는 환경입니다. (샌드박스/로컬) 브라우저 다운로드를 사용합니다.');
-          // 브라우저 다운로드로 대체
-          fallbackDownload(canvas, filename);
-        }
+        await saveBase64Data({
+          data: base64Data,
+          fileName: filename,
+          mimeType: 'image/png',
+        });
+        console.log('갤러리 저장 성공');
+        setSaveToast({ show: true, message: '📷 갤러리에 저장했습니다!' });
+        setTimeout(() => {
+          setSaveToast({ show: false, message: '' });
+        }, 2500);
       } catch (saveError) {
-        console.warn('갤러리 저장 API 호출 실패 (샌드박스 환경):', saveError);
-        // 샌드박스에서는 에러를 무시하고 브라우저 다운로드 사용
+        console.warn('갤러리 저장 실패, 브라우저 다운로드로 대체:', saveError);
+        // 샌드박스/로컬 등 미지원 환경에서는 브라우저 다운로드로 대체
         fallbackDownload(canvas, filename);
       }
       
@@ -680,6 +792,29 @@ export default function ResultPage({ items, onBack }) {
     if (totalSections <= 12) return '12px';
     return '10px';
   };
+
+  // 하드웨어/제스처 뒤로가기 처리: 로딩 페이지로 가지 않도록 차단하고 설정 페이지로 이동
+  useEffect(() => {
+    // 현재 페이지에서 한 단계 더 쌓아 두어 뒤로가기를 감지
+    try {
+      window.history.pushState({ page: 'result-guard' }, '');
+    } catch {}
+
+    const onPop = (e) => {
+      // 뒤로가기가 발생하면 설정 페이지로 보내거나 onBack 실행
+      e?.preventDefault?.();
+      if (onBack) {
+        onBack();
+      }
+      // 다시 가드 상태를 쌓아서 반복 뒤로가기에 대비
+      try { window.history.pushState({ page: 'result-guard' }, ''); } catch {}
+    };
+
+    window.addEventListener('popstate', onPop);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+    };
+  }, [onBack]);
 
   return (
     <div className="result-page" style={{ 
@@ -837,8 +972,8 @@ export default function ResultPage({ items, onBack }) {
         </div>
       </div>
 
-      {/* 광고 모달 */}
-      {showAdModal && (
+      {/* 광고 모달 - 네이티브 광고가 표시되면 자동으로 가려짐 */}
+      {showAdModal && !adShowing && (
         <div style={{
           position: 'fixed',
           top: 0,
@@ -849,7 +984,8 @@ export default function ResultPage({ items, onBack }) {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
+          zIndex: 1000,
+          // 네이티브 광고가 표시될 때는 모달 숨김 (adShowing이 true면 네이티브 광고가 위에 있음)
         }}>
           <div style={{
             backgroundColor: '#fff',
@@ -888,7 +1024,7 @@ export default function ResultPage({ items, onBack }) {
               </button>
             )}
             
-            {isAdLoading ? (
+            {adLoading ? (
               <>
                 <div style={{
                   fontSize: '32px',
@@ -995,21 +1131,21 @@ export default function ResultPage({ items, onBack }) {
                   </button>
                   <button
                     onClick={handleWatchAd}
-                    disabled={isAdLoading}
+                    disabled={adLoading}
                     style={{
                       flex: 1,
                       padding: '14px',
-                      backgroundColor: isAdLoading ? '#ccc' : '#3182f6',
+                      backgroundColor: adLoading ? '#ccc' : '#3182f6',
                       color: 'white',
                       border: 'none',
                       borderRadius: '12px',
                       fontSize: '15px',
                       fontWeight: '600',
-                      cursor: isAdLoading ? 'not-allowed' : 'pointer',
-                      opacity: isAdLoading ? 0.6 : 1
+                      cursor: adLoading ? 'not-allowed' : 'pointer',
+                      opacity: adLoading ? 0.6 : 1
                     }}
                   >
-                    {isAdLoading ? '로딩 중...' : '광고 보기'}
+                    {adLoading ? '로딩 중...' : '광고 보기'}
                   </button>
                 </div>
               </>
@@ -1018,10 +1154,11 @@ export default function ResultPage({ items, onBack }) {
         </div>
       )}
 
-      {showResult && result && (
+             {showResult && result && (
         <>
           {/* 버튼 위쪽까지 그라데이션 흐림 효과 */}
-          <div 
+                 <div 
+                   className="result-overlay"
             style={{
               position: 'fixed',
               top: 0,
@@ -1076,7 +1213,7 @@ export default function ResultPage({ items, onBack }) {
           </div>
           
           {/* 결과 텍스트 - 중앙 배치 */}
-          <div style={{
+                 <div style={{
             position: 'fixed',
             top: '50%',
             left: '50%',
@@ -1089,14 +1226,15 @@ export default function ResultPage({ items, onBack }) {
             width: '100%',
             maxWidth: '90%'
           }}>
-            <div style={{
+                   <div className="result-card" style={{
               position: 'relative',
-              backgroundColor: '#fff',
-              padding: '40px 60px',
-              borderRadius: '24px',
-              textAlign: 'center',
-              boxShadow: '0 10px 40px rgba(0, 0, 0, 0.2)',
-              border: '3px solid #f0f0f0',
+                     backgroundColor: '#ffffff', // 완전한 흰색으로 뒤 배경 완전히 차단
+                     padding: '44px 68px',
+                     borderRadius: '24px',
+                     textAlign: 'center',
+                     boxShadow: '0 24px 64px rgba(0, 0, 0, 0.38)',
+                     border: '2px solid #ffffff',
+                     backdropFilter: 'none',
               minWidth: '200px',
               maxWidth: '80vw',
               animation: 'resultPopIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards'
@@ -1140,16 +1278,17 @@ export default function ResultPage({ items, onBack }) {
                 ×
               </button>
               
-              <h2 style={{ 
-                fontSize: '42px', 
-                fontWeight: 'bold', 
-                margin: 0,
-                color: '#191F28',
-                wordBreak: 'keep-all',
-                lineHeight: '1.3',
-                maxWidth: '100%',
-                overflowWrap: 'break-word'
-              }}>
+                     <h2 style={{ 
+                       fontSize: '48px', 
+                       fontWeight: 900,
+                       margin: 0,
+                       color: '#0D0F12', // 훨씬 진하게
+                       wordBreak: 'keep-all',
+                       lineHeight: '1.25',
+                       maxWidth: '100%',
+                       overflowWrap: 'break-word',
+                       textShadow: '0 1px 0 rgba(255,255,255,0.6)'
+                     }}>
                 {result.text}
               </h2>
             </div>

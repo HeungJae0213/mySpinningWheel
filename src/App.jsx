@@ -6,7 +6,7 @@ import LoadingPage from './pages/LoadingPage.jsx';
 import ResultPage from './pages/ResultPage.jsx';
 import './App.css';
 
-const WELCOME_PATH = '/';
+const WELCOME_PATH = '/welcome';
 const SETTING_PATH = '/setting';
 const LOADING_PATH = '/loading';
 const RESULT_PATH = '/result';
@@ -36,6 +36,8 @@ function AppRoutes() {
 
   return (
     <Routes>
+      {/* 기본 루트로 들어오면 /welcome으로 이동 */}
+      <Route path="/" element={<Navigate to={WELCOME_PATH} replace />} />
       <Route path={WELCOME_PATH} element={<WelcomePage onConfirm={handleWelcomeConfirm} />} />
       <Route path={SETTING_PATH} element={<SettingPage onGenerate={handleGenerate} savedItems={savedSettings} />} />
       <Route path={LOADING_PATH} element={<LoadingPage />} />

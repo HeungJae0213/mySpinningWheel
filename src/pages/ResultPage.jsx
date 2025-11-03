@@ -1,10 +1,12 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import html2canvas from 'html2canvas';
 import './ResultPage.css';
 import { AD_CONFIG } from '../config/adConfig';
 import { GoogleAdMob, saveBase64Data } from '@apps-in-toss/web-framework';
 
 export default function ResultPage({ items, onBack }) {
+  const navigate = useNavigate();
   const [rotation, setRotation] = useState(0);
   const [isSpinning, setIsSpinning] = useState(false);
   const [showResult, setShowResult] = useState(false);
@@ -271,12 +273,8 @@ export default function ResultPage({ items, onBack }) {
               clearTimeout(adWaitTimeoutRef.current);
               adWaitTimeoutRef.current = undefined;
             }
-            // 모달이 이미 열려있으면 자동으로 광고 표시
-            // (load 완료 후 show 호출 - 토스 가이드 준수)
-            if (showAdModal && !adShowing) {
-              console.log('📌 모달이 열려있음 - load 완료 후 자동으로 show 호출');
-              // 상태 업데이트 후 showAd가 호출되도록 useEffect에 의존
-            }
+            // 다크패턴 방지: 모달이 열려있어도 자동으로 광고 표시하지 않음
+            // 사용자가 명시적으로 "광고 보기" 버튼을 클릭했을 때만 광고 표시
           }
         },
         onError: (loadError) => {
@@ -478,24 +476,11 @@ export default function ResultPage({ items, onBack }) {
   }, [adType, loadAd]);
 
   /**
-   * 모달이 열려있을 때 광고 로드 완료 감지 - 자동으로 광고 표시
-   * (토스 개발자 커뮤니티 가이드: load가 완료된 후 show를 호출해야 함)
+   * 다크패턴 방지: 모달이 열려도 자동으로 광고를 표시하지 않음
+   * 사용자가 명시적으로 "광고 보기" 버튼을 클릭했을 때만 광고를 표시
+   * (토스 다크패턴 방지 정책: 예상치 못한 순간에 광고가 뜨면 안 됨)
    */
-  useEffect(() => {
-    if (showAdModal && adLoaded && !adShowing) {
-      console.log('✅ 모달 열림 + 광고 로드 완료 - 자동으로 광고 표시');
-      
-      // 타임아웃 정리
-      if (adWaitTimeoutRef.current) {
-        clearTimeout(adWaitTimeoutRef.current);
-        adWaitTimeoutRef.current = undefined;
-      }
-      // 원복: 스핀 대기 타이머 사용 안 함
-
-      // load가 완료된 후 show 호출 (중요!)
-      showAd();
-    }
-  }, [showAdModal, adLoaded, adShowing, showAd]);
+  // 자동 광고 표시 로직 제거 - handleWatchAd에서만 광고 표시
 
   /**
    * 광고 미지원 환경 체크 - 모달이 열려있을 때 자동으로 닫기
@@ -590,6 +575,12 @@ export default function ResultPage({ items, onBack }) {
 
       // 타이머 정리
       clearAllTimers();
+      
+      // 저장 관련 타이머 정리
+      if (saveToastTimerRef.current) {
+        clearTimeout(saveToastTimerRef.current);
+        saveToastTimerRef.current = undefined;
+      }
     };
   }, [loadAd]);
 
@@ -632,13 +623,21 @@ export default function ResultPage({ items, onBack }) {
   };
 
   // 갤러리 저장 (Apps in Toss 공식 API 사용)
+  // 메모리 최적화: 타이머 참조를 ref로 관리하여 정리 가능하도록 수정
+  const saveToastTimerRef = useRef(undefined);
+  
   const handleSave = async () => {
     try {
       // 결과가 표시 중일 때만 저장
       if (!showResult) {
+        // 기존 타이머 정리
+        if (saveToastTimerRef.current) {
+          clearTimeout(saveToastTimerRef.current);
+        }
         setSaveToast({ show: true, message: '먼저 돌림판을 돌려주세요!' });
-        setTimeout(() => {
+        saveToastTimerRef.current = setTimeout(() => {
           setSaveToast({ show: false, message: '' });
+          saveToastTimerRef.current = undefined;
         }, 2500);
         return;
       }
@@ -659,13 +658,23 @@ export default function ResultPage({ items, onBack }) {
       await new Promise(resolve => setTimeout(resolve, 50));
       
       // 결과 페이지 전체 캡처 (배경 흐림 + 카드 포함)
+      // 메모리 최적화: scale을 1.5로 감소 (2배에서 4배 메모리 감소)
       const target = document.querySelector('.result-page');
       const canvas = await html2canvas(target, {
         backgroundColor: null, // 원 배경 유지
-        scale: 2,
+        scale: 1.5, // 메모리 최적화: 2 -> 1.5 (화질은 거의 동일, 메모리 44% 감소)
         logging: false,
         useCORS: true,
-        allowTaint: true
+        allowTaint: true,
+        removeContainer: true, // 메모리 정리: 임시 컨테이너 제거
+        onclone: (clonedDoc) => {
+          // 클론된 문서에서 불필요한 요소 제거로 메모리 절약
+          const clonedTarget = clonedDoc.querySelector('.result-page');
+          if (clonedTarget) {
+            // 스타일 최적화로 렌더링 부하 감소
+            clonedTarget.style.willChange = 'auto';
+          }
+        }
       });
       
       // 원래 상태로 복원
@@ -674,10 +683,14 @@ export default function ResultPage({ items, onBack }) {
       if (headerElement) headerElement.style.visibility = 'visible';
       // overlay는 변경하지 않음
       
-      // Canvas를 Base64로 변환
-      const base64Data = canvas.toDataURL('image/png').split(',')[1];
+      // Canvas를 Base64로 변환 (JPEG로 압축하여 메모리 및 파일 크기 감소)
+      const base64Data = canvas.toDataURL('image/jpeg', 0.9).split(',')[1]; // PNG 대신 JPEG 90% 품질 사용
       const timestamp = new Date().getTime();
-      const filename = `돌림판_결과_${timestamp}.png`;
+      const filename = `돌림판_결과_${timestamp}.jpg`;
+      
+      // Canvas 메모리 정리
+      canvas.width = 0;
+      canvas.height = 0;
       
       // Apps in Toss saveBase64Data API 사용 (Result.tsx 참고)
       // API 형식: { data, fileName, mimeType }
@@ -685,35 +698,74 @@ export default function ResultPage({ items, onBack }) {
         await saveBase64Data({
           data: base64Data,
           fileName: filename,
-          mimeType: 'image/png',
+          mimeType: 'image/jpeg', // JPEG로 변경
         });
         console.log('갤러리 저장 성공');
         setSaveToast({ show: true, message: '📷 갤러리에 저장했습니다!' });
-        setTimeout(() => {
+        // 기존 타이머 정리
+        if (saveToastTimerRef.current) {
+          clearTimeout(saveToastTimerRef.current);
+        }
+        saveToastTimerRef.current = setTimeout(() => {
           setSaveToast({ show: false, message: '' });
+          saveToastTimerRef.current = undefined;
         }, 2500);
       } catch (saveError) {
         console.warn('갤러리 저장 실패, 브라우저 다운로드로 대체:', saveError);
         // 샌드박스/로컬 등 미지원 환경에서는 브라우저 다운로드로 대체
-        fallbackDownload(canvas, filename);
+        // Canvas가 이미 정리되었을 수 있으므로 다시 생성 필요
+        try {
+          const target = document.querySelector('.result-page');
+          const retryCanvas = await html2canvas(target, {
+            backgroundColor: null,
+            scale: 1.5,
+            logging: false,
+            useCORS: true,
+            allowTaint: true
+          });
+          fallbackDownload(retryCanvas, filename.replace('.jpg', '.png'));
+        } catch (retryError) {
+          console.error('재시도 캡처 실패:', retryError);
+          setSaveToast({ show: true, message: '이미지 저장에 실패했습니다.' });
+          if (saveToastTimerRef.current) {
+            clearTimeout(saveToastTimerRef.current);
+          }
+          saveToastTimerRef.current = setTimeout(() => {
+            setSaveToast({ show: false, message: '' });
+            saveToastTimerRef.current = undefined;
+          }, 2500);
+        }
       }
       
     } catch (error) {
       console.error('Failed to save image:', error);
-      setSaveToast({ show: true, message: '이미지 저장에 실패했습니다.' });
-      setTimeout(() => {
-        setSaveToast({ show: false, message: '' });
-      }, 2500);
+        setSaveToast({ show: true, message: '이미지 저장에 실패했습니다.' });
+        if (saveToastTimerRef.current) {
+          clearTimeout(saveToastTimerRef.current);
+        }
+        saveToastTimerRef.current = setTimeout(() => {
+          setSaveToast({ show: false, message: '' });
+          saveToastTimerRef.current = undefined;
+        }, 2500);
     }
   };
 
   // 브라우저 다운로드 (대체 방법)
+  // 메모리 최적화: Canvas 정리 및 타이머 관리 추가
   const fallbackDownload = (canvas, filename) => {
     canvas.toBlob((blob) => {
+      // Canvas 메모리 정리
+      canvas.width = 0;
+      canvas.height = 0;
+      
       if (!blob) {
         setSaveToast({ show: true, message: '이미지 생성에 실패했습니다.' });
-        setTimeout(() => {
+        if (saveToastTimerRef.current) {
+          clearTimeout(saveToastTimerRef.current);
+        }
+        saveToastTimerRef.current = setTimeout(() => {
           setSaveToast({ show: false, message: '' });
+          saveToastTimerRef.current = undefined;
         }, 2500);
         return;
       }
@@ -729,13 +781,17 @@ export default function ResultPage({ items, onBack }) {
         link.click();
         setTimeout(() => {
           document.body.removeChild(link);
-          URL.revokeObjectURL(url);
+          URL.revokeObjectURL(url); // 메모리 정리
         }, 100);
       }, 0);
       
       setSaveToast({ show: true, message: '💾 다운로드 폴더를 확인해주세요!' });
-      setTimeout(() => {
+      if (saveToastTimerRef.current) {
+        clearTimeout(saveToastTimerRef.current);
+      }
+      saveToastTimerRef.current = setTimeout(() => {
         setSaveToast({ show: false, message: '' });
+        saveToastTimerRef.current = undefined;
       }, 2500);
     }, 'image/png');
   };
@@ -793,7 +849,7 @@ export default function ResultPage({ items, onBack }) {
     return '10px';
   };
 
-  // 하드웨어/제스처 뒤로가기 처리: 로딩 페이지로 가지 않도록 차단하고 설정 페이지로 이동
+  // 하드웨어/제스처 뒤로가기 처리: 히스토리 스택에 따라 이전 화면으로 이동
   useEffect(() => {
     // 현재 페이지에서 한 단계 더 쌓아 두어 뒤로가기를 감지
     try {
@@ -801,10 +857,17 @@ export default function ResultPage({ items, onBack }) {
     } catch {}
 
     const onPop = (e) => {
-      // 뒤로가기가 발생하면 설정 페이지로 보내거나 onBack 실행
+      // 뒤로가기가 발생하면 React Router의 navigate로 처리
       e?.preventDefault?.();
-      if (onBack) {
-        onBack();
+      
+      // 히스토리 스택이 있으면 이전 화면으로, 없으면 설정 페이지로 이동
+      if (window.history.length > 1) {
+        navigate(-1);
+      } else {
+        // 스택이 없으면 설정 페이지로 이동
+        if (onBack) {
+          onBack();
+        }
       }
       // 다시 가드 상태를 쌓아서 반복 뒤로가기에 대비
       try { window.history.pushState({ page: 'result-guard' }, ''); } catch {}
@@ -814,7 +877,7 @@ export default function ResultPage({ items, onBack }) {
     return () => {
       window.removeEventListener('popstate', onPop);
     };
-  }, [onBack]);
+  }, [navigate, onBack]);
 
   return (
     <div className="result-page" style={{ 
@@ -1173,7 +1236,7 @@ export default function ResultPage({ items, onBack }) {
             }}
           />
           
-          {/* 폭죽 효과 */}
+          {/* 폭죽 효과 - 메모리 최적화: 50개 -> 30개로 감소 */}
           <div style={{
             position: 'fixed',
             top: 0,
@@ -1184,7 +1247,7 @@ export default function ResultPage({ items, onBack }) {
             zIndex: 24,
             overflow: 'hidden'
           }}>
-            {[...Array(50)].map((_, i) => {
+            {[...Array(30)].map((_, i) => {
               const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f7b731', '#5f27cd', '#00d2d3', '#ff9ff3', '#54a0ff', '#48dbfb', '#1dd1a1'];
               const randomColor = colors[Math.floor(Math.random() * colors.length)];
               const randomX = Math.random() * 100;

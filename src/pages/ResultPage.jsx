@@ -903,31 +903,79 @@ export default function ResultPage({ items, onBack }) {
     return '10px';
   };
 
-  // 하드웨어/제스처 뒤로가기 처리: 히스토리 스택에 따라 이전 화면으로 이동
+  // Android 환경에서 뒤로가기 처리: 히스토리 스택에 따라 이전 화면으로 이동
   useEffect(() => {
+    // 다른 페이지를 방문했다는 플래그 설정 (WelcomePage에서 앱 종료 방지)
+    sessionStorage.setItem('has_visited_other_page', 'true');
+    
+    // Android 환경 감지
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    
     // 현재 페이지에서 한 단계 더 쌓아 두어 뒤로가기를 감지
     try {
       window.history.pushState({ page: 'result-guard' }, '');
     } catch {}
 
+    const handleBackButton = () => {
+      // 뒤로가기 버튼 처리
+      if (onBack) {
+        onBack();
+      } else {
+        // onBack이 없으면 이전 페이지로 이동 시도
+        if (window.history.length > 1) {
+          navigate(-1);
+        }
+      }
+    };
+
     const onPop = (e) => {
       // 뒤로가기가 발생하면 React Router의 navigate로 처리
       e?.preventDefault?.();
+      e?.stopPropagation?.();
       
-      // 히스토리 스택이 있으면 이전 화면으로, 없으면 설정 페이지로 이동
-      if (window.history.length > 1) {
-        navigate(-1);
+      // Android 환경에서는 더 확실하게 처리
+      if (isAndroid) {
+        handleBackButton();
       } else {
-        // 스택이 없으면 설정 페이지로 이동
-        if (onBack) {
-          onBack();
+        // 히스토리 스택이 있으면 이전 화면으로, 없으면 설정 페이지로 이동
+        if (window.history.length > 1) {
+          navigate(-1);
+        } else {
+          // 스택이 없으면 설정 페이지로 이동
+          if (onBack) {
+            onBack();
+          }
         }
       }
+      
       // 다시 가드 상태를 쌓아서 반복 뒤로가기에 대비
-      try { window.history.pushState({ page: 'result-guard' }, ''); } catch {}
+      try { 
+        window.history.pushState({ page: 'result-guard' }, ''); 
+      } catch {}
     };
 
+    // popstate 이벤트 리스너
     window.addEventListener('popstate', onPop);
+    
+    // Android WebView에서 뒤로가기 버튼을 직접 처리하기 위한 추가 리스너
+    if (isAndroid) {
+      // Android WebView의 뒤로가기 버튼 이벤트 (가능한 경우)
+      const handleKeyDown = (e) => {
+        // Android 뒤로가기 키 코드는 일반적으로 감지되지 않지만, 시도
+        if (e.key === 'Backspace' && e.target === document.body) {
+          e.preventDefault();
+          handleBackButton();
+        }
+      };
+      
+      window.addEventListener('keydown', handleKeyDown);
+      
+      return () => {
+        window.removeEventListener('popstate', onPop);
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+    
     return () => {
       window.removeEventListener('popstate', onPop);
     };

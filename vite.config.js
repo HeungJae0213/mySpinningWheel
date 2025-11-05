@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
   base: './',
@@ -26,9 +25,7 @@ export default defineConfig({
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept, Origin',
       'Access-Control-Allow-Credentials': 'true',
       // Note: Access-Control-Allow-Origin은 cors 설정에서 동적으로 처리됨
-      // 실제 배포 환경에서는 백엔드 서버에서도 아래 도메인들을 Origin 허용 목록에 등록해야 함:
-      // https://my-spinning-wheel.apps.tossmini.com (실제 서비스 환경)
-      // https://my-spinning-wheel.private-apps.tossmini.com (콘솔 QR 테스트 환경)
+      // 실제 배포 환경에서는 백엔드 서버에서도 아래 도메인들을 Origin 허용 목록에 등록해야 함
     },
   },
   build: {

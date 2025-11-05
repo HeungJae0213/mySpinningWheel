@@ -1,12 +1,112 @@
-import React from 'react'
+import React, { useEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { closeView } from '@apps-in-toss/web-framework';
 
 export default function WelcomePage({ onConfirm }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isFirstVisitRef = useRef(true); // 첫 방문 여부 추적
+  const isProcessingBackRef = useRef(false); // 뒤로가기 처리 중 플래그 (연타 방지)
+  const guardAddedRef = useRef(false); // 히스토리 가드 추가 여부
+  
   const handleConfirm = () => {
     console.log('확인했어요 클릭');
     if (onConfirm) {
       onConfirm();
     }
   };
+
+  useEffect(() => {
+    // 컴포넌트 마운트 시 첫 방문 여부 확인
+    const hasVisitedOtherPage = sessionStorage.getItem('has_visited_other_page') === 'true';
+    if (!hasVisitedOtherPage) {
+      isFirstVisitRef.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    // 현재 페이지에서 한 단계 더 쌓아 두어 뒤로가기를 감지 (한 번만)
+    if (!guardAddedRef.current) {
+      try {
+        window.history.pushState({ page: 'welcome-guard' }, '');
+        guardAddedRef.current = true;
+      } catch {}
+    }
+
+    const onPop = async (e) => {
+      // 연타 방지: 이미 처리 중이면 무시
+      if (isProcessingBackRef.current) {
+        e?.preventDefault?.();
+        e?.stopPropagation?.();
+        return;
+      }
+      
+      isProcessingBackRef.current = true;
+      
+      // 다른 페이지를 방문했는지 확인
+      const hasVisitedOtherPage = sessionStorage.getItem('has_visited_other_page') === 'true';
+      
+      console.log('뒤로가기 이벤트 발생:', { hasVisitedOtherPage, pathname: location.pathname });
+      
+      // 첫 방문이고 다른 페이지를 방문한 적이 없으면 앱 종료
+      if (!hasVisitedOtherPage) {
+        e?.preventDefault?.();
+        e?.stopPropagation?.();
+        console.log('첫 페이지에서 뒤로가기 - closeView 호출');
+        try {
+          await closeView();
+          console.log('closeView 호출 완료');
+          return;
+        } catch (error) {
+          console.error('closeView 호출 실패:', error);
+          // fallback: 일반적인 앱 종료 시도
+          if (window.close) {
+            window.close();
+          }
+          return;
+        }
+      } else {
+        // 다른 페이지를 방문한 후 돌아온 경우
+        // WelcomePage에서 뒤로가기를 누르면, 뒤로 갈 페이지가 없을 수 있음
+        e?.preventDefault?.();
+        e?.stopPropagation?.();
+        
+        // 현재 브라우저 히스토리 길이 확인
+        // main.jsx의 'init' + 'welcome-guard'를 제외한 실제 네비게이션 히스토리 확인
+        const historyLength = window.history.length;
+        const currentState = window.history.state;
+        
+        // 실제로 뒤로 갈 페이지가 있는지 확인
+        // React Router의 히스토리 스택을 확인하기 어려우므로
+        // WelcomePage에서 뒤로가기를 누르면 항상 앱 종료로 처리
+        // (SettingPage에서 WelcomePage로 돌아온 경우, WelcomePage는 여전히 첫 페이지이므로)
+        console.log('WelcomePage에서 뒤로가기 - closeView 호출 (다른 페이지 방문 후 복귀)');
+        try {
+          await closeView();
+          console.log('closeView 호출 완료');
+          isProcessingBackRef.current = false;
+          return;
+        } catch (error) {
+          console.error('closeView 호출 실패:', error);
+          // fallback: navigate(-1) 시도
+          try {
+            navigate(-1);
+          } catch (navError) {
+            console.error('navigate(-1) 실패:', navError);
+          }
+          isProcessingBackRef.current = false;
+          return;
+        }
+      }
+    };
+
+    window.addEventListener('popstate', onPop);
+    
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      isProcessingBackRef.current = false;
+    };
+  }, [navigate, location.pathname, location.key]);
 
   // 12가지 무지개색 (겹치지 않게)
   const colors = [

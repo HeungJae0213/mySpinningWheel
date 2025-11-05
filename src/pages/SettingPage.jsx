@@ -1,8 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { colors } from '../components/TDSComponents.jsx';
 import './SettingPage.css';
 
 export default function SettingPage({ onGenerate, savedItems }) {
+  const navigate = useNavigate();
   // 색깔 중복 방지 함수
   const getUniqueColors = (count) => {
     const shuffled = [...colors].sort(() => Math.random() - 0.5);
@@ -52,6 +54,50 @@ export default function SettingPage({ onGenerate, savedItems }) {
       return () => clearTimeout(timer);
     }
   }, [toast.show]);
+
+  // Android 환경에서 뒤로가기 처리: 이전 페이지로 이동
+  useEffect(() => {
+    // 다른 페이지를 방문했다는 플래그 설정 (WelcomePage에서 앱 종료 방지)
+    sessionStorage.setItem('has_visited_other_page', 'true');
+    
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    
+    // 현재 페이지에서 한 단계 더 쌓아 두어 뒤로가기를 감지
+    try {
+      window.history.pushState({ page: 'setting-guard' }, '');
+    } catch {}
+
+    const handleBackButton = () => {
+      // 이전 페이지로 이동 (Welcome 페이지)
+      navigate(-1);
+    };
+
+    const onPop = (e) => {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+      
+      // Android 환경에서는 더 확실하게 처리
+      if (isAndroid) {
+        handleBackButton();
+      } else {
+        // 히스토리 스택이 있으면 이전 화면으로
+        if (window.history.length > 1) {
+          navigate(-1);
+        }
+      }
+      
+      // 다시 가드 상태를 쌓아서 반복 뒤로가기에 대비
+      try { 
+        window.history.pushState({ page: 'setting-guard' }, ''); 
+      } catch {}
+    };
+
+    window.addEventListener('popstate', onPop);
+    
+    return () => {
+      window.removeEventListener('popstate', onPop);
+    };
+  }, [navigate]);
 
   // 토스트 표시 함수
   const showToast = (message) => {

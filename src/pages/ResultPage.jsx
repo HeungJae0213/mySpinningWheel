@@ -24,7 +24,7 @@ export default function ResultPage({ items, onBack }) {
   const [adLoaded, setAdLoaded] = useState(false);
   const [adShowing, setAdShowing] = useState(false);
   const [adType, setAdType] = useState('rewarded'); // 'rewarded' | 'interstitial'
-  const [adLoading, setAdLoading] = useState(true); // with-rewarded-ad 스타일
+  const [adLoading, setAdLoading] = useState(false); // 모달 열릴 때는 false, 광고 보기 버튼 클릭 시 true로 변경
   
   // Refs (ProfilePage.tsx 스타일)
   const cleanupRef = useRef(undefined);
@@ -236,10 +236,10 @@ export default function ResultPage({ items, onBack }) {
           console.log('🔄 전면형 광고로 전환 (미지원)');
           setAdType('interstitial');
           loadAd('interstitial');
-        } else {
-          if (showAdModal) setShowAdModal(false);
-          grantConsolationSpin();
-        }
+          } else {
+            if (showAdModal) setShowAdModal(false);
+            grantConsolationSpin('광고 기능이 지원되지 않아요. 1회 기회를 드립니다.');
+          }
         return;
       }
 
@@ -298,7 +298,7 @@ export default function ResultPage({ items, onBack }) {
           } else {
             console.warn('⚠️ 전면형 로드 실패 - 1회 지급 후 종료');
             if (showAdModal) setShowAdModal(false);
-            grantConsolationSpin();
+            grantConsolationSpin('광고 로딩에 실패했어요. 1회 기회를 드립니다.');
           }
         },
       });
@@ -320,7 +320,7 @@ export default function ResultPage({ items, onBack }) {
         // 모달이 열려있으면 닫고 1회 제공
         if (showAdModal) {
           setShowAdModal(false);
-          grantConsolationSpin();
+          grantConsolationSpin('광고 로딩에 실패했어요. 1회 기회를 드립니다.');
         }
       }
     }
@@ -424,12 +424,16 @@ export default function ResultPage({ items, onBack }) {
                 }
               }
 
-              // 상태 정리 및 다음 광고 로드
+              // 상태 정리 (다음 광고는 사용자가 다시 모달을 열고 광고 보기를 클릭할 때만 로드)
               setAdShowing(false);
               setAdWatching(false);
               setShowAdModal(false);
               setAdProgress(0);
-              loadAd('rewarded'); // 다음엔 보상형부터 다시 시도
+              // 광고 로딩 중지 및 정리
+              cleanupRef.current?.();
+              cleanupRef.current = undefined;
+              setAdLoaded(false);
+              setAdLoading(false);
               break;
 
             case 'failedToShow':
@@ -437,14 +441,13 @@ export default function ResultPage({ items, onBack }) {
               setAdShowing(false);
               setAdWatching(false);
               setShowAdModal(false);
-              if (adType === 'rewarded') {
-                // 보상형 표시 실패 → 전면형 시도
-                setAdType('interstitial');
-                loadAd('interstitial');
-              } else {
-                // 전면형 표시 실패 → 1회 지급
-                grantConsolationSpin();
-              }
+              // 광고 로딩 중지 및 정리
+              cleanupRef.current?.();
+              cleanupRef.current = undefined;
+              setAdLoaded(false);
+              setAdLoading(false);
+              // 실패 시 1회 지급
+              grantConsolationSpin('광고 로딩에 실패했어요. 1회 기회를 드립니다.');
               break;
           }
         },
@@ -453,12 +456,13 @@ export default function ResultPage({ items, onBack }) {
           setAdShowing(false);
           setAdWatching(false);
           setShowAdModal(false);
-          if (adType === 'rewarded') {
-            setAdType('interstitial');
-            loadAd('interstitial');
-          } else {
-            grantConsolationSpin();
-          }
+          // 광고 로딩 중지 및 정리
+          cleanupRef.current?.();
+          cleanupRef.current = undefined;
+          setAdLoaded(false);
+          setAdLoading(false);
+          // 에러 시 1회 지급
+          grantConsolationSpin('광고 표시 중 오류가 발생했어요. 1회 기회를 드립니다.');
         }
       });
     } catch (error) {
@@ -466,21 +470,32 @@ export default function ResultPage({ items, onBack }) {
       setAdShowing(false);
       setAdWatching(false);
       setShowAdModal(false);
-      if (adType === 'rewarded') {
-        setAdType('interstitial');
-        loadAd('interstitial');
-      } else {
-        grantConsolationSpin();
-      }
+      // 광고 로딩 중지 및 정리
+      cleanupRef.current?.();
+      cleanupRef.current = undefined;
+      setAdLoaded(false);
+      setAdLoading(false);
+      // 예외 발생 시 1회 지급
+      grantConsolationSpin('광고 표시 중 오류가 발생했어요. 1회 기회를 드립니다.');
     }
   }, [adType, loadAd]);
 
   /**
+   * 광고 로드 완료 후 자동 표시 (사용자가 "광고 보기" 버튼을 클릭한 경우만)
    * 다크패턴 방지: 모달이 열려도 자동으로 광고를 표시하지 않음
    * 사용자가 명시적으로 "광고 보기" 버튼을 클릭했을 때만 광고를 표시
    * (토스 다크패턴 방지 정책: 예상치 못한 순간에 광고가 뜨면 안 됨)
    */
-  // 자동 광고 표시 로직 제거 - handleWatchAd에서만 광고 표시
+  const [userRequestedAd, setUserRequestedAd] = useState(false); // 사용자가 광고 보기 버튼을 클릭했는지 추적
+  
+  useEffect(() => {
+    // 사용자가 광고 보기를 요청했고, 광고가 로드 완료되면 자동으로 표시
+    if (userRequestedAd && adLoaded && !adLoading && !adShowing && showAdModal) {
+      console.log('✅ 사용자 요청 + 광고 로드 완료 - 자동으로 광고 표시');
+      setUserRequestedAd(false); // 플래그 리셋
+      showAd();
+    }
+  }, [userRequestedAd, adLoaded, adLoading, adShowing, showAdModal, showAd]);
 
   /**
    * 광고 미지원 환경 체크 - 모달이 열려있을 때 자동으로 닫기
@@ -505,7 +520,7 @@ export default function ResultPage({ items, onBack }) {
   }, [showAdModal]);
 
   /**
-   * 광고 보기 버튼 클릭 핸들러 (with-rewarded-ad 스타일로 단순화)
+   * 광고 보기 버튼 클릭 핸들러 - 이때만 광고 로딩 시작
    */
   const handleWatchAd = useCallback(() => {
     try {
@@ -515,36 +530,37 @@ export default function ResultPage({ items, onBack }) {
       console.log('🔍 [handleWatchAd] adLoading:', adLoading);
       console.log('🔍 [handleWatchAd] adType:', adType);
 
-      // with-rewarded-ad 스타일: loading이거나 미지원이면 리턴
-      if (adLoading || isSupported !== true) {
-        console.warn('⚠️ 광고 준비 안 됨 - loading:', adLoading, ', supported:', isSupported);
-        if (isSupported !== true) {
-          setShowAdModal(false);
-          setSaveToast({ show: true, message: '광고 기능이 지원되지 않습니다.' });
-          setTimeout(() => {
-            setSaveToast({ show: false, message: '' });
-          }, 2500);
-        } else if (adLoading) {
-          // 광고 로드 중이라면 로드 시작 요청
-          console.log('⏳ 광고 로드 중 - 모달 열려있으므로 자동으로 로드 진행');
-          // loadAd가 이미 실행 중이면 대기만 하면 됨
-        }
+      // 광고 기능 미지원 시
+      if (isSupported !== true) {
+        console.warn('⚠️ 광고 기능 미지원');
+        setShowAdModal(false);
+        grantConsolationSpin('광고 기능이 지원되지 않아요. 1회 기회를 드립니다.');
         return;
       }
 
-      // 광고가 로드되어 있고 지원되면 바로 표시
+      // 이미 광고가 로드되어 있으면 바로 표시
       if (adLoaded && !adLoading) {
         console.log('✅ 광고 로드 완료 - show 호출');
         showAd();
-      } else {
-        console.warn('⚠️ 광고 로드 안 됨 - 다시 로드 시도');
-        // 광고가 로드 안 되어 있으면 다시 로드
+        return;
+      }
+
+      // 광고가 로드 안 되어 있으면 로드 시작 (처음 광고 보기 버튼 클릭 시)
+      if (!adLoading && !adLoaded) {
+        console.log('📥 광고 보기 버튼 클릭 - 광고 로딩 시작');
         setAdLoading(true);
-        loadAd(adType);
+        setAdType('rewarded'); // 보상형 광고로 설정
+        setUserRequestedAd(true); // 사용자가 광고 보기를 요청함
+        loadAd('rewarded'); // 보상형 광고부터 시도
+      } else if (adLoading) {
+        console.log('⏳ 광고 로드 중 - 대기 중...');
+        // 이미 로딩 중이면 사용자 요청 플래그 설정 (로드 완료 후 자동 표시)
+        setUserRequestedAd(true);
       }
     } catch (error) {
       console.error('❌ 광고 표시 중 예외 발생:', error);
       setShowAdModal(false);
+      grantConsolationSpin('광고 표시 중 오류가 발생했어요. 1회 기회를 드립니다.');
     }
   }, [adLoaded, adLoading, adType, showAd, loadAd]);
 
@@ -559,17 +575,49 @@ export default function ResultPage({ items, onBack }) {
     rewardEarnedRef.current = false; // 보상 지급 안 함
   };
 
+  // 모달 닫기 (광고 보지 않고 닫을 때 1회 지급, 진행 중인 광고 로딩 중지)
+  const handleCloseAdModal = () => {
+    // 진행 중인 광고 로딩 중지
+    console.log('⚠️ 모달 닫기 - 진행 중인 광고 로딩 중지');
+    cleanupRef.current?.();
+    cleanupRef.current = undefined;
+    
+    // 상태 정리
+    setAdLoaded(false);
+    setAdLoading(false);
+    setAdShowing(false);
+    setAdWatching(false);
+    setAdProgress(0);
+    rewardEarnedRef.current = false;
+    adSkippedRef.current = false;
+    setUserRequestedAd(false); // 사용자 요청 플래그 리셋
+    
+    // 광고를 보지 않고 닫으면 1회 지급
+    setRemainingSpins(prev => prev + 1);
+    setShowAdModal(false);
+    setSaveToast({ 
+      show: true, 
+      message: '💡 광고를 보면 5회, 지금은 1회만 지급되었어요!' 
+    });
+    if (saveToastTimerRef.current) {
+      clearTimeout(saveToastTimerRef.current);
+    }
+    saveToastTimerRef.current = setTimeout(() => {
+      setSaveToast({ show: false, message: '' });
+      saveToastTimerRef.current = undefined;
+    }, 3000); // 3초로 조금 늘림 (메시지가 좀 길어서)
+  };
+
   /**
-   * 컴포넌트 마운트 시 광고 로드 및 언마운트 시 정리
-   * (with-rewarded-ad 스타일)
+   * 컴포넌트 언마운트 시 정리
+   * 광고 로딩은 사용자가 "광고 보기" 버튼을 클릭했을 때만 시작
    */
   useEffect(() => {
-    console.log('🚀 ResultPage 마운트 - 광고 초기 로드 시작');
-    loadAd('rewarded');
+    console.log('🚀 ResultPage 마운트');
 
     return () => {
       console.log('🧹 ResultPage 언마운트 - cleanup 실행');
-      // cleanup 함수 호출
+      // cleanup 함수 호출 (진행 중인 광고 로딩 중지)
       cleanupRef.current?.();
       cleanupRef.current = undefined;
 
@@ -582,14 +630,20 @@ export default function ResultPage({ items, onBack }) {
         saveToastTimerRef.current = undefined;
       }
     };
-  }, [loadAd]);
+  }, []);
 
   const handleSpin = () => {
     if (isSpinning) return;
     
     // 남은 스핀 횟수 확인
     if (remainingSpins <= 0) {
-      // 원복: 모달만 열고, 로드는 기존 로직에 맡김
+      // 모달만 열고, 광고 로딩은 시작하지 않음
+      // 광고 상태 초기화 (이전 상태 정리)
+      setAdLoaded(false);
+      setAdLoading(false);
+      setAdShowing(false);
+      setAdWatching(false);
+      setUserRequestedAd(false);
       setShowAdModal(true);
       return;
     }
@@ -1063,7 +1117,7 @@ export default function ResultPage({ items, onBack }) {
             {/* 다크패턴 방지: 나갈 수 있는 X 버튼 추가 */}
             {!adWatching && (
               <button
-                onClick={() => setShowAdModal(false)}
+                onClick={handleCloseAdModal}
                 style={{
                   position: 'absolute',
                   top: '16px',
@@ -1171,13 +1225,18 @@ export default function ResultPage({ items, onBack }) {
                   color: '#666',
                   marginBottom: '30px',
                   lineHeight: '1.5'
-                }}>광고를 끝까지 시청하면<br/>5번의 기회를 드려요</p>
+                }}>
+                  광고를 끝까지 시청하면 <strong style={{ color: '#3182f6' }}>5번의 기회</strong>를 드려요<br/>
+                  <span style={{ fontSize: '13px', color: '#999' }}>
+                    (광고를 보지 않으면 1번만 지급됩니다)
+                  </span>
+                </p>
                 <div style={{
                   display: 'flex',
                   gap: '10px'
                 }}>
                   <button
-                    onClick={() => setShowAdModal(false)}
+                    onClick={handleCloseAdModal}
                     style={{
                       flex: 1,
                       padding: '14px',
@@ -1190,7 +1249,7 @@ export default function ResultPage({ items, onBack }) {
                       cursor: 'pointer'
                     }}
                   >
-                    닫기
+                    1회 받기
                   </button>
                   <button
                     onClick={handleWatchAd}

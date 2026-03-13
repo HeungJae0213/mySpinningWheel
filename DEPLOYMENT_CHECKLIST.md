@@ -1,5 +1,12 @@
 # 배포 전 체크리스트
 
+## 0. SDK 2.x 마이그레이션 ✅
+
+### 적용 완료 사항:
+- ✅ `@apps-in-toss/web-framework` 2.x 적용
+- ✅ 빌드 커맨드 `granite build` → `ait build` 전환
+- ✅ 개발 커맨드 `granite dev` → `ait dev` 전환
+
 ## 1. 메모리 및 리소스 최적화 ✅
 
 ### 완료된 최적화 사항:

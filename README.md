@@ -12,7 +12,7 @@
 ### 기술 구성
 - **프론트엔드**: React 18 + Vite 5 + JavaScript
 - **플랫폼**: Apps in Toss (WebView 기반)
-- **주요 라이브러리**: React Router, html2canvas, Apps in Toss Web Framework
+- **주요 라이브러리**: React Router, html2canvas, Apps in Toss Web Framework 2.x
 - **광고 시스템**: Google AdMob (보상형/전면형)
 
 ---
